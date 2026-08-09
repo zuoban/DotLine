@@ -88,6 +88,22 @@ function assertCodeContrast(foreground: string, background: string): void {
   }
 }
 
+function assertBarcodeContent(inputText: string, config: QrConfig): void {
+  if (config.barcodeFormat === 'MSI' && !/^\d+$/.test(inputText)) {
+    throw new Error('MSI（无校验位模式）仅支持纯数字。');
+  }
+
+  if (config.barcodeFormat === 'pharmacode') {
+    if (!/^[1-9]\d*$/.test(inputText)) {
+      throw new Error('Pharmacode 仅支持 3 到 131070 之间且不含前导零的整数。');
+    }
+    const value = Number(inputText);
+    if (!Number.isSafeInteger(value) || value < 3 || value > 131070) {
+      throw new Error('Pharmacode 仅支持 3 到 131070 之间且不含前导零的整数。');
+    }
+  }
+}
+
 function requireNumberInRange(
   value: number,
   label: string,
@@ -215,6 +231,7 @@ export async function generateCompositeCode(
   }
   const extraTextToDraw = resolvedExtraText;
   assertCodeContrast(config.qrColor, config.bgColor);
+  if (config.codeMode === 'barcode') assertBarcodeContent(trimmedInput, config);
 
   const inputFontSize = showInput
     ? requireNumberInRange(config.inputFontSize, '输入文本字号', 1, 256)

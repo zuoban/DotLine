@@ -16,4 +16,27 @@ describe('generateCompositeCode', () => {
       }),
     ).rejects.toThrow('对比度不足');
   });
+
+  it('rejects non-numeric MSI input with an explicit checksum-mode message', async () => {
+    await expect(
+      generateCompositeCode('12A34', {
+        ...defaultConfig,
+        codeMode: 'barcode',
+        barcodeFormat: 'MSI',
+      }),
+    ).rejects.toThrow('MSI（无校验位模式）仅支持纯数字');
+  });
+
+  it.each(['2', '131071', '12abc', '0003'])(
+    'rejects non-canonical Pharmacode input %s',
+    async (inputText) => {
+      await expect(
+        generateCompositeCode(inputText, {
+          ...defaultConfig,
+          codeMode: 'barcode',
+          barcodeFormat: 'pharmacode',
+        }),
+      ).rejects.toThrow('Pharmacode 仅支持 3 到 131070 之间且不含前导零的整数');
+    },
+  );
 });

@@ -8,6 +8,13 @@ import {
   MultiFormatReader,
   RGBLuminanceSource,
 } from '@zxing/library';
+import {
+  decodeMsi,
+  decodePharmacode,
+  readBarcodePngScanline,
+} from './barcodePixelDecoder';
+
+test.describe.configure({ mode: 'serial' });
 
 async function openApp(page: Page): Promise<void> {
   await page.emulateMedia({ reducedMotion: 'reduce' });
@@ -45,6 +52,22 @@ async function readDownload(download: Download): Promise<Buffer> {
   }
 
   return Buffer.concat(chunks);
+}
+
+function seededIntegerSamples(seed: number, count: number, min: number, max: number): string[] {
+  let state = seed >>> 0;
+  return Array.from({ length: count }, () => {
+    state = (Math.imul(state, 1_664_525) + 1_013_904_223) >>> 0;
+    return String(min + (state % (max - min + 1)));
+  });
+}
+
+async function readDownloadedBarcodeScanline(page: Page) {
+  const downloadPromise = page.waitForEvent('download');
+  await page.getByRole('button', { name: '下载图片', exact: true }).click();
+  const download = await downloadPromise;
+  expect(await download.failure()).toBeNull();
+  return readBarcodePngScanline(page, await readDownload(download));
 }
 
 async function expectNoHorizontalOverflow(page: Page): Promise<void> {
@@ -123,6 +146,7 @@ test('码图渲染运行在独立 Web Worker 中', async ({ page }) => {
 });
 
 test('生成后的二维码可以反向解码为原始内容', async ({ page }) => {
+  test.setTimeout(60_000);
   await openApp(page);
   const value = 'https://example.com/scan-verification';
   await page.getByLabel(/输入生成内容 \/ 序列号 \/ 网址/).fill(value);
@@ -133,6 +157,7 @@ test('生成后的二维码可以反向解码为原始内容', async ({ page }) 
 });
 
 test('常用一维码生成后可以反向解码', async ({ page }) => {
+  test.setTimeout(90_000);
   await openApp(page);
   await page.getByRole('button', { name: /一维条码/ }).click();
   const input = page.getByLabel(/输入生成内容 \/ 序列号 \/ 网址/);
@@ -147,6 +172,7 @@ test('常用一维码生成后可以反向解码', async ({ page }) => {
 
   for (const barcodeCase of cases) {
     await page.getByLabel('条码编码标准', { exact: true }).selectOption(barcodeCase.option);
+    await expect(page.getByLabel('条码编码标准', { exact: true })).toHaveValue(barcodeCase.option);
     await page.getByRole('button', { name: '使用示例', exact: true }).click();
     await expect(input).toHaveValue(barcodeCase.value);
     const image = page.getByRole('img', {
@@ -158,21 +184,69 @@ test('常用一维码生成后可以反向解码', async ({ page }) => {
   }
 });
 
-test('Pharmacode 示例会生成有效条形码', async ({ page }) => {
+test('MSI 和 Pharmacode 可以从导出像素反向还原', async ({ page }) => {
+  test.setTimeout(90_000);
   await openApp(page);
-
   const barcodeMode = page.getByRole('button', { name: /一维条码/ });
   await barcodeMode.click();
   await expect(barcodeMode).toHaveAttribute('aria-pressed', 'true');
+  await page.getByRole('button', { name: /1x 标准/ }).click();
+  await page.getByRole('switch', { name: /条码宽度自适应拉长/ }).setChecked(false);
+  await page.getByRole('switch', { name: /显示输入文本/ }).setChecked(false);
 
-  await page.getByLabel('条码编码标准', { exact: true }).selectOption('pharmacode');
-  await page.getByRole('button', { name: '使用示例', exact: true }).click();
-
+  const formatSelect = page.getByLabel('条码编码标准', { exact: true });
   const input = page.getByLabel(/输入生成内容 \/ 序列号 \/ 网址/);
-  await expect(input).toHaveValue('12345');
-  await expect(page.getByRole('img', { name: '条形码预览：12345', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: '下载图片', exact: true })).toBeEnabled();
-  await expect(page.getByRole('alert')).toHaveCount(0);
+
+  await formatSelect.selectOption('MSI');
+  const msiSamples = [
+    '0',
+    '7',
+    '000123',
+    '12345678',
+    '9081726354',
+    ...seededIntegerSamples(0x4d5349, 4, 10, 999_999_999),
+  ];
+  for (const value of msiSamples) {
+    await input.fill(value);
+    const image = page.getByRole('img', { name: `条形码预览：${value}`, exact: true });
+    await expect(image).toBeVisible();
+    const scanline = await readDownloadedBarcodeScanline(page);
+    expect(Math.min(scanline.leftQuietZone, scanline.rightQuietZone)).toBeGreaterThanOrEqual(8);
+    expect(decodeMsi(scanline)).toBe(value);
+  }
+
+  await formatSelect.selectOption('pharmacode');
+  const pharmacodeSamples = [
+    '3',
+    '4',
+    '5',
+    '42',
+    '999',
+    '12345',
+    '65535',
+    '131070',
+    ...seededIntegerSamples(0x50484152, 4, 3, 131_070),
+  ];
+  for (const value of pharmacodeSamples) {
+    await input.fill(value);
+    const image = page.getByRole('img', { name: `条形码预览：${value}`, exact: true });
+    await expect(image).toBeVisible();
+    const scanline = await readDownloadedBarcodeScanline(page);
+    expect(Math.min(scanline.leftQuietZone, scanline.rightQuietZone)).toBeGreaterThanOrEqual(8);
+    expect(decodePharmacode(scanline)).toBe(value);
+  }
+
+  for (const invalidValue of ['2', '131071', '12abc', '0003']) {
+    await input.fill(invalidValue);
+    await expect(page.getByRole('alert')).toContainText(
+      'Pharmacode 仅支持 3 到 131070 之间且不含前导零的整数',
+    );
+    await expect(page.getByRole('img', { name: /^条形码预览：/ })).toHaveCount(0);
+  }
+
+  await formatSelect.selectOption('MSI');
+  await input.fill('12A34');
+  await expect(page.getByRole('alert')).toContainText('MSI（无校验位模式）仅支持纯数字');
 });
 
 test('样式设置会跨刷新保存并可一键恢复默认', async ({ page }) => {

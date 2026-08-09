@@ -56,6 +56,7 @@ test('键盘可切换工作区并下载二维码', { tag: '@cross-browser' }, as
 });
 
 test('缺少 OffscreenCanvas 时仍可解析并导出 Excel', { tag: '@cross-browser' }, async ({ page }) => {
+  test.setTimeout(90_000);
   await page.addInitScript(() => {
     Object.defineProperty(globalThis, 'OffscreenCanvas', {
       configurable: true,

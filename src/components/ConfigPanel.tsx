@@ -25,8 +25,8 @@ const BARCODE_FORMATS: { label: string; value: BarcodeFormat; desc: string }[] =
   { label: 'EAN8 (短商品码)', value: 'EAN8', desc: '短包装商品，必须为 7 或 8 位纯数字' },
   { label: 'UPC (美规码)', value: 'UPC', desc: '北美零售通用，11 或 12 位纯数字' },
   { label: 'ITF14 (物流码)', value: 'ITF14', desc: '交错二五码，用于外箱，14位数字' },
-  { label: 'MSI', value: 'MSI', desc: '仓库货架标识，纯数字' },
-  { label: 'Pharmacode', value: 'pharmacode', desc: '医药包装专用码' },
+  { label: 'MSI', value: 'MSI', desc: '仓库货架标识；纯数字，不自动添加校验位' },
+  { label: 'Pharmacode', value: 'pharmacode', desc: '医药包装专用码；有效范围 3–131070' },
 ];
 
 const ASPECT_RATIOS: { label: string; value: AspectRatioOption }[] = [
