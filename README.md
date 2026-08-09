@@ -88,7 +88,7 @@ npm run benchmark:batch
 npm run benchmark:compare
 ```
 
-浏览器测试会验证键盘操作及缺少 OffscreenCanvas 时的自动降级。性能报告写入 `performance-results/batch-performance.json`；CI 会保存报告并与最近一次 `main` 基线比较，解析或导出耗时退化超过 15% 时产生告警。
+浏览器测试会验证键盘操作、缺少 OffscreenCanvas 时的自动降级，并从实际下载的 Excel / ZIP 中提取 PNG，反向校验 QR、CODE128、EAN13、MSI 与 Pharmacode 内容。性能报告写入 `performance-results/batch-performance.json`；CI 会保存报告并与最近一次 `main` 基线比较，解析或导出耗时退化超过 15% 时产生告警。
 
 ---
 

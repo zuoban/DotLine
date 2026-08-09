@@ -1,5 +1,6 @@
 import { expect, test, type Download, type Locator, type Page } from '@playwright/test';
 import ExcelJS from 'exceljs';
+import JSZip from 'jszip';
 import {
   BarcodeFormat,
   BinaryBitmap,
@@ -35,11 +36,26 @@ async function createLegacyBlankRowWorkbook(): Promise<Buffer> {
 
   sheet.getCell('A2').value = 'ROW-2';
   sheet.getCell('B2').value = '是';
+  sheet.getCell('C2').value = '批次 A';
 
   // Excel 第 3 行有意留空，用于覆盖原始行号映射。
   sheet.getCell('A4').value = 'ROW-4';
   sheet.getCell('B4').value = '否';
+  sheet.getCell('C4').value = '批次 B';
 
+  return Buffer.from(await workbook.xlsx.writeBuffer());
+}
+
+interface BatchWorkbookRow {
+  inputText: string;
+  extraText: string;
+}
+
+async function createBatchWorkbook(rows: readonly BatchWorkbookRow[]): Promise<Buffer> {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet('批量成品校验');
+  sheet.addRow(['输入文本', '附加内容']);
+  rows.forEach(({ inputText, extraText }) => sheet.addRow([inputText, extraText]));
   return Buffer.from(await workbook.xlsx.writeBuffer());
 }
 
@@ -52,6 +68,28 @@ async function readDownload(download: Download): Promise<Buffer> {
   }
 
   return Buffer.concat(chunks);
+}
+
+interface PngArchiveEntry {
+  path: string;
+  buffer: Buffer;
+}
+
+async function readPngArchiveEntries(
+  archiveBuffer: Buffer,
+  pathPrefix: string,
+): Promise<PngArchiveEntry[]> {
+  const archive = await JSZip.loadAsync(archiveBuffer);
+  const pngEntries = Object.values(archive.files)
+    .filter((entry) => !entry.dir && entry.name.startsWith(pathPrefix) && entry.name.endsWith('.png'))
+    .sort((left, right) => left.name.localeCompare(right.name, 'en', { numeric: true }));
+
+  return Promise.all(
+    pngEntries.map(async (entry) => ({
+      path: entry.name,
+      buffer: await entry.async('nodebuffer'),
+    })),
+  );
 }
 
 function seededIntegerSamples(seed: number, count: number, min: number, max: number): string[] {
@@ -82,9 +120,14 @@ async function expectNoHorizontalOverflow(page: Page): Promise<void> {
     .toBe(true);
 }
 
-async function decodeGeneratedImage(image: Locator, format: BarcodeFormat): Promise<string> {
-  const pixels = await image.evaluate(async (element) => {
-    const source = element as HTMLImageElement;
+async function decodeImageSource(
+  page: Page,
+  sourceUrl: string,
+  format: BarcodeFormat,
+): Promise<string> {
+  const pixels = await page.evaluate(async (url) => {
+    const source = new Image();
+    source.src = url;
     await source.decode();
     const canvas = document.createElement('canvas');
     canvas.width = source.naturalWidth;
@@ -101,7 +144,7 @@ async function decodeGeneratedImage(image: Locator, format: BarcodeFormat): Prom
       targetIndex += 1;
     }
     return { width: canvas.width, height: canvas.height, luminance };
-  });
+  }, sourceUrl);
 
   const source = new RGBLuminanceSource(
     Uint8ClampedArray.from(pixels.luminance),
@@ -113,6 +156,20 @@ async function decodeGeneratedImage(image: Locator, format: BarcodeFormat): Prom
   hints.set(DecodeHintType.POSSIBLE_FORMATS, [format]);
   hints.set(DecodeHintType.TRY_HARDER, true);
   return new MultiFormatReader().decode(bitmap, hints).getText();
+}
+
+async function decodeGeneratedImage(image: Locator, format: BarcodeFormat): Promise<string> {
+  const sourceUrl = await image.getAttribute('src');
+  if (!sourceUrl) throw new Error('码图预览缺少图片地址');
+  return decodeImageSource(image.page(), sourceUrl, format);
+}
+
+async function decodePngBuffer(
+  page: Page,
+  pngBuffer: Buffer,
+  format: BarcodeFormat,
+): Promise<string> {
+  return decodeImageSource(page, `data:image/png;base64,${pngBuffer.toString('base64')}`, format);
 }
 
 test('默认二维码使用黑色文本并可下载 PNG', async ({ page }) => {
@@ -397,6 +454,117 @@ test('页面开关统一覆盖旧 Excel 列且空白行不会打乱导出位置'
     .map((image) => Math.floor(image.range.tl.nativeRow))
     .sort((left, right) => left - right);
   expect(imageRows).toEqual([1, 3]);
+
+  const embeddedPngs = await readPngArchiveEntries(downloadedBuffer, 'xl/media/');
+  expect(embeddedPngs.map(({ path }) => path)).toEqual([
+    'xl/media/image1.png',
+    'xl/media/image2.png',
+  ]);
+  const decodedValues = await Promise.all(
+    embeddedPngs.map(({ buffer }) => decodePngBuffer(page, buffer, BarcodeFormat.QR_CODE)),
+  );
+  expect(decodedValues.sort()).toEqual(['ROW-2', 'ROW-4']);
+});
+
+test('ZIP 批量成品可反向解码并保留失败记录', async ({ page }) => {
+  test.setTimeout(120_000);
+  await openApp(page);
+  await page.getByRole('button', { name: /一维条码/ }).click();
+  await page.getByRole('button', { name: /1x 标准/ }).click();
+  await page.getByRole('switch', { name: /条码宽度自适应拉长/ }).setChecked(false);
+  await page.getByRole('switch', { name: /显示输入文本/ }).setChecked(false);
+  await page.getByRole('tab', { name: /Excel 批量/ }).click();
+
+  interface ZipArtifactCase {
+    option: string;
+    rows: BatchWorkbookRow[];
+    expectedPaths: string[];
+    expectedValues: string[];
+    decode: (pngBuffer: Buffer) => Promise<string>;
+    expectedFailure?: string;
+  }
+
+  const cases: ZipArtifactCase[] = [
+    {
+      option: 'CODE128',
+      rows: [{ inputText: 'BATCH-CODE128-01', extraText: 'code128-item' }],
+      expectedPaths: ['barcode_images/1_code128-item.png'],
+      expectedValues: ['BATCH-CODE128-01'],
+      decode: (pngBuffer) => decodePngBuffer(page, pngBuffer, BarcodeFormat.CODE_128),
+    },
+    {
+      option: 'EAN13',
+      rows: [
+        { inputText: '6901234567892', extraText: 'ean-valid-a' },
+        { inputText: '123', extraText: 'ean-invalid' },
+        { inputText: '4006381333931', extraText: 'ean-valid-b' },
+      ],
+      expectedPaths: [
+        'barcode_images/1_ean-valid-a.png',
+        'barcode_images/3_ean-valid-b.png',
+      ],
+      expectedValues: ['4006381333931', '6901234567892'],
+      decode: (pngBuffer) => decodePngBuffer(page, pngBuffer, BarcodeFormat.EAN_13),
+      expectedFailure: 'Excel 第 3 行',
+    },
+    {
+      option: 'MSI',
+      rows: [{ inputText: '000123', extraText: 'msi-item' }],
+      expectedPaths: ['barcode_images/1_msi-item.png'],
+      expectedValues: ['000123'],
+      decode: async (pngBuffer) => decodeMsi(await readBarcodePngScanline(page, pngBuffer)),
+    },
+    {
+      option: 'pharmacode',
+      rows: [{ inputText: '131070', extraText: 'pharmacode-item' }],
+      expectedPaths: ['barcode_images/1_pharmacode-item.png'],
+      expectedValues: ['131070'],
+      decode: async (pngBuffer) =>
+        decodePharmacode(await readBarcodePngScanline(page, pngBuffer)),
+    },
+  ];
+
+  const formatSelect = page.getByLabel('条码编码标准', { exact: true });
+  const fileInput = page.locator('#excel-file-upload');
+  const exportButton = page.getByRole('button', {
+    name: '打包下载所有图片 (.zip)',
+    exact: true,
+  });
+
+  for (const artifactCase of cases) {
+    await formatSelect.selectOption(artifactCase.option);
+    await fileInput.setInputFiles({
+      name: `${artifactCase.option}-artifact.xlsx`,
+      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      buffer: await createBatchWorkbook(artifactCase.rows),
+    });
+    await expect(page.getByText(`成功读取 ${artifactCase.rows.length} 条数据记录`, { exact: true })).toBeVisible();
+
+    const downloadPromise = page.waitForEvent('download');
+    await exportButton.click();
+    const download = await downloadPromise;
+    expect(download.suggestedFilename()).toMatch(/^码图压缩包_\d+\.zip$/);
+    expect(await download.failure()).toBeNull();
+
+    const downloadedBuffer = await readDownload(download);
+    const archive = await JSZip.loadAsync(downloadedBuffer);
+    const pngEntries = await readPngArchiveEntries(downloadedBuffer, 'barcode_images/');
+    expect(pngEntries.map(({ path }) => path)).toEqual(artifactCase.expectedPaths);
+
+    const decodedValues: string[] = [];
+    for (const { buffer } of pngEntries) {
+      decodedValues.push(await artifactCase.decode(buffer));
+    }
+    expect(decodedValues.sort()).toEqual(artifactCase.expectedValues);
+
+    const failureReport = archive.file('生成失败记录.txt');
+    if (artifactCase.expectedFailure) {
+      expect(failureReport).not.toBeNull();
+      await expect(failureReport?.async('text')).resolves.toContain(artifactCase.expectedFailure);
+    } else {
+      expect(failureReport).toBeNull();
+    }
+  }
 });
 
 test('375px 手机布局无横向滚动且核心工作区优先', async ({ page }) => {
