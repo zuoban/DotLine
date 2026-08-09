@@ -80,12 +80,15 @@ npm run build
 # 5. 运行类型检查、代码规范、测试与构建
 npm run check
 
-# 6. 运行 100 / 500 / 1000 / 2000 行批量性能基准
+# 6. 运行 Chromium 完整回归、Firefox/WebKit 冒烟与 axe 无障碍测试
+npm run test:e2e
+
+# 7. 运行 100 / 500 / 1000 / 2000 行批量性能基准
 npm run benchmark:batch
 npm run benchmark:compare
 ```
 
-性能报告写入 `performance-results/batch-performance.json`。CI 会保存报告并与最近一次 `main` 基线比较；解析或导出耗时退化超过 15% 时产生告警。
+浏览器测试会验证键盘操作及缺少 OffscreenCanvas 时的自动降级。性能报告写入 `performance-results/batch-performance.json`；CI 会保存报告并与最近一次 `main` 基线比较，解析或导出耗时退化超过 15% 时产生告警。
 
 ---
 

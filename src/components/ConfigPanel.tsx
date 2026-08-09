@@ -136,7 +136,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, onChange, onRe
                   }`}
                 >
                   <span>{option.label}</span>
-                  <span className="text-[11px] font-normal leading-tight opacity-80">{option.desc}</span>
+                  <span className="text-[11px] font-normal leading-tight">{option.desc}</span>
                 </button>
               );
             })}
