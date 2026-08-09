@@ -1,6 +1,15 @@
 import React from 'react';
-import { Settings2, Type, Sliders, Barcode as BarcodeIcon, QrCode as QrIcon, Crop, Maximize2, Sparkles } from 'lucide-react';
-import { QrConfig, BarcodeFormat, AspectRatioOption } from '../types';
+import {
+  Barcode as BarcodeIcon,
+  Crop,
+  Maximize2,
+  QrCode as QrIcon,
+  Settings2,
+  Sliders,
+  Sparkles,
+  Type,
+} from 'lucide-react';
+import { AspectRatioOption, BarcodeFormat, QrConfig } from '../types';
 
 interface ConfigPanelProps {
   config: QrConfig;
@@ -32,390 +41,461 @@ const SCALE_OPTIONS: { label: string; value: number; desc: string }[] = [
   { label: '1x 标准', value: 1, desc: '普通分辨率 (~300px)' },
   { label: '2x 高清', value: 2, desc: '视网膜/2K (~600px)' },
   { label: '3x 超清', value: 3, desc: '4K画质 (~1000px)' },
-  { label: '4x 300DPI', value: 4, desc: '印刷标贴级 (~1400px)' },
+  { label: '4x 印刷高清', value: 4, desc: '高像素印刷用途 (~1400px)' },
 ];
+
+const optionButtonClass =
+  'min-h-11 rounded-xl border text-center text-xs font-medium transition-[color,background-color,border-color,box-shadow] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-1 motion-reduce:transition-none';
+const rangeInputClass =
+  'h-11 w-full cursor-pointer rounded accent-indigo-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-1';
+const textInputClass =
+  'min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-base sm:text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500';
+const colorInputClass =
+  'h-11 w-11 cursor-pointer rounded-lg border border-slate-200 p-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-1';
 
 export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, onChange }) => {
   const updateField = <K extends keyof QrConfig>(field: K, value: QrConfig[K]) => {
     onChange({ ...config, [field]: value });
   };
 
+  const activeBarcodeFormat = BARCODE_FORMATS.find((format) => format.value === config.barcodeFormat);
+
   return (
-    <div className="bg-white rounded-2xl border border-slate-200/80 shadow-sm p-5 space-y-6">
-      <div className="flex items-center gap-2 pb-3 border-b border-slate-100">
-        <Settings2 className="w-5 h-5 text-indigo-600" />
-        <h2 className="font-semibold text-slate-800 text-base">样式与码制类型设置</h2>
+    <div className="space-y-6 rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm sm:p-5">
+      <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
+        <Settings2 className="h-5 w-5 text-indigo-600" aria-hidden="true" />
+        <h2 className="text-base font-semibold text-slate-800">样式与码制类型设置</h2>
       </div>
 
-      {/* 码制模式切换 */}
-      <div className="space-y-2">
-        <label className="block text-xs font-semibold text-slate-700">选择编码模式</label>
-        <div className="grid grid-cols-2 gap-2 bg-slate-100 p-1 rounded-xl border border-slate-200">
+      <fieldset className="min-w-0 space-y-2">
+        <legend className="text-xs font-semibold text-slate-700">选择编码模式</legend>
+        <div className="grid grid-cols-2 gap-2 rounded-xl border border-slate-200 bg-slate-100 p-1">
           <button
             type="button"
+            aria-pressed={config.codeMode === 'qr'}
             onClick={() => updateField('codeMode', 'qr')}
-            className={`flex items-center justify-center gap-2 py-2 px-3 text-xs font-medium rounded-lg transition-all ${
+            className={`${optionButtonClass} flex items-center justify-center gap-2 px-2 ${
               config.codeMode === 'qr'
-                ? 'bg-white text-indigo-600 shadow-sm font-semibold'
-                : 'text-slate-600 hover:text-slate-900'
+                ? 'border-transparent bg-white font-semibold text-indigo-600 shadow-sm'
+                : 'border-transparent text-slate-600 hover:text-slate-900'
             }`}
           >
-            <QrIcon className="w-4 h-4" />
-            二维码 (QR Code)
+            <QrIcon className="h-4 w-4 shrink-0" aria-hidden="true" />
+            <span>二维码 <span className="hidden sm:inline">(QR Code)</span></span>
           </button>
 
           <button
             type="button"
+            aria-pressed={config.codeMode === 'barcode'}
             onClick={() => updateField('codeMode', 'barcode')}
-            className={`flex items-center justify-center gap-2 py-2 px-3 text-xs font-medium rounded-lg transition-all ${
+            className={`${optionButtonClass} flex items-center justify-center gap-2 px-2 ${
               config.codeMode === 'barcode'
-                ? 'bg-white text-indigo-600 shadow-sm font-semibold'
-                : 'text-slate-600 hover:text-slate-900'
+                ? 'border-transparent bg-white font-semibold text-indigo-600 shadow-sm'
+                : 'border-transparent text-slate-600 hover:text-slate-900'
             }`}
           >
-            <BarcodeIcon className="w-4 h-4" />
-            一维条码 (Barcode)
+            <BarcodeIcon className="h-4 w-4 shrink-0" aria-hidden="true" />
+            <span>一维条码 <span className="hidden sm:inline">(Barcode)</span></span>
           </button>
         </div>
+      </fieldset>
+
+      <div className="border-t border-slate-100 pt-4">
+        <fieldset className="min-w-0 space-y-3">
+          <legend className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+            <span className="inline-flex items-center gap-1.5">
+              <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
+              输出图片清晰度 (HD Scale)
+            </span>
+          </legend>
+
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {SCALE_OPTIONS.map((option) => {
+              const isSelected = (config.scale || 2) === option.value;
+
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  aria-pressed={isSelected}
+                  onClick={() => updateField('scale', option.value)}
+                  className={`${optionButtonClass} flex min-h-[3.5rem] flex-col items-center justify-center gap-0.5 px-2 py-2 ${
+                    isSelected
+                      ? 'border-indigo-200 bg-indigo-50 font-semibold text-indigo-700 shadow-sm'
+                      : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                  }`}
+                >
+                  <span>{option.label}</span>
+                  <span className="text-[11px] font-normal leading-tight opacity-80">{option.desc}</span>
+                </button>
+              );
+            })}
+          </div>
+        </fieldset>
       </div>
 
-      {/* 图像分辨率 / 清晰度缩放倍率设置 */}
-      <div className="space-y-3 pt-2 border-t border-slate-100">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-          <Sparkles className="w-3.5 h-3.5" />
-          输出图片清晰度 (HD Scale)
-        </h3>
+      <div className="border-t border-slate-100 pt-4">
+        <fieldset className="min-w-0 space-y-4">
+          <legend className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+            <span className="inline-flex items-center gap-1.5">
+              <Sliders className="h-3.5 w-3.5" aria-hidden="true" />
+              {config.codeMode === 'barcode' ? '一维条码属性' : '二维码属性'}
+            </span>
+          </legend>
 
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-          {SCALE_OPTIONS.map((opt) => (
-            <button
-              key={opt.value}
-              type="button"
-              onClick={() => updateField('scale', opt.value)}
-              className={`py-2 px-2 text-xs font-medium rounded-xl border transition-all text-center flex flex-col items-center justify-center gap-0.5 ${
-                (config.scale || 2) === opt.value
-                  ? 'bg-indigo-50 text-indigo-700 border-indigo-200 font-semibold shadow-sm'
-                  : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
-              }`}
-            >
-              <span>{opt.label}</span>
-              <span className="text-[10px] opacity-75 font-normal">{opt.desc}</span>
-            </button>
-          ))}
-        </div>
-      </div>
+          {config.codeMode === 'barcode' ? (
+            <div className="space-y-4">
+              <div>
+                <label htmlFor="config-barcode-format" className="mb-1 block text-xs font-medium text-slate-700">
+                  条码编码标准
+                </label>
+                <select
+                  id="config-barcode-format"
+                  value={config.barcodeFormat}
+                  aria-describedby="config-barcode-format-description"
+                  onChange={(event) => updateField('barcodeFormat', event.target.value as BarcodeFormat)}
+                  className={textInputClass}
+                >
+                  {BARCODE_FORMATS.map((format) => (
+                    <option key={format.value} value={format.value}>
+                      {format.label}
+                    </option>
+                  ))}
+                </select>
+                <p id="config-barcode-format-description" className="mt-1 text-[11px] leading-4 text-slate-500">
+                  {activeBarcodeFormat?.desc}
+                </p>
+              </div>
 
-      {/* 码图尺寸与格式 */}
-      <div className="space-y-4 pt-4 border-t border-slate-100">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-          <Sliders className="w-3.5 h-3.5" />
-          {config.codeMode === 'barcode' ? '一维条码属性' : '二维码属性'}
-        </h3>
-
-        {config.codeMode === 'barcode' ? (
-          <div className="space-y-4">
-            <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">条码编码标准</label>
-              <select
-                value={config.barcodeFormat}
-                onChange={(e) => updateField('barcodeFormat', e.target.value as BarcodeFormat)}
-                className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+              <label
+                htmlFor="config-auto-width-barcode"
+                className="flex min-h-14 cursor-pointer items-center justify-between gap-3 rounded-xl border border-indigo-100 bg-indigo-50/70 p-3"
               >
-                {BARCODE_FORMATS.map((fmt) => (
-                  <option key={fmt.value} value={fmt.value}>
-                    {fmt.label}
-                  </option>
-                ))}
-              </select>
-              <p className="text-[11px] text-slate-400 mt-1">
-                {BARCODE_FORMATS.find((f) => f.value === config.barcodeFormat)?.desc}
-              </p>
-            </div>
+                <span className="flex min-w-0 items-center gap-2">
+                  <Maximize2 className="h-4 w-4 shrink-0 text-indigo-600" aria-hidden="true" />
+                  <span>
+                    <span className="block text-xs font-semibold text-slate-800">条码宽度自适应拉长</span>
+                    <span className="block text-[11px] leading-4 text-slate-600">自动扩展条码填满卡片可用宽度</span>
+                  </span>
+                </span>
+                <span className="flex min-h-11 min-w-11 shrink-0 items-center justify-center">
+                  <input
+                    id="config-auto-width-barcode"
+                    type="checkbox"
+                    role="switch"
+                    checked={config.autoWidthBarcode}
+                    onChange={(event) => updateField('autoWidthBarcode', event.target.checked)}
+                    className="h-5 w-5 cursor-pointer rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                  />
+                </span>
+              </label>
 
-            {/* 条码宽度自适应拉长控制开关 */}
-            <div className="flex items-center justify-between bg-indigo-50/70 p-3 rounded-xl border border-indigo-100">
-              <div className="flex items-center gap-2">
-                <Maximize2 className="w-4 h-4 text-indigo-600" />
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-4">
                 <div>
-                  <span className="text-xs font-semibold text-slate-800 block">条码宽度自适应拉长</span>
-                  <span className="text-[11px] text-slate-500">自动扩展条码填满卡片可用宽度</span>
+                  <label htmlFor="config-barcode-width" className="block text-xs font-medium text-slate-700">
+                    基准线宽 ({config.barcodeWidth}px)
+                  </label>
+                  <input
+                    id="config-barcode-width"
+                    type="range"
+                    min="1"
+                    max="4"
+                    step="1"
+                    value={config.barcodeWidth}
+                    onChange={(event) => updateField('barcodeWidth', Number(event.target.value))}
+                    className={rangeInputClass}
+                  />
+                </div>
+
+                <div>
+                  <label htmlFor="config-barcode-height" className="block text-xs font-medium text-slate-700">
+                    条码高度 ({config.barcodeHeight}px)
+                  </label>
+                  <input
+                    id="config-barcode-height"
+                    type="range"
+                    min="40"
+                    max="160"
+                    step="5"
+                    value={config.barcodeHeight}
+                    onChange={(event) => updateField('barcodeHeight', Number(event.target.value))}
+                    className={rangeInputClass}
+                  />
                 </div>
               </div>
-              <input
-                type="checkbox"
-                checked={config.autoWidthBarcode}
-                onChange={(e) => updateField('autoWidthBarcode', e.target.checked)}
-                className="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500 cursor-pointer"
-              />
             </div>
-
-            <div className="grid grid-cols-2 gap-4">
+          ) : (
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-4">
               <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">
-                  基准线宽 ({config.barcodeWidth}px)
+                <label htmlFor="config-qr-size" className="block text-xs font-medium text-slate-700">
+                  二维码尺寸 ({config.qrSize}px)
                 </label>
                 <input
+                  id="config-qr-size"
                   type="range"
-                  min="1"
+                  min="120"
+                  max="400"
+                  step="10"
+                  value={config.qrSize}
+                  onChange={(event) => updateField('qrSize', Number(event.target.value))}
+                  className={rangeInputClass}
+                />
+              </div>
+
+              <div>
+                <label htmlFor="config-qr-margin" className="block text-xs font-medium text-slate-700">
+                  内边距 ({config.margin})
+                </label>
+                <input
+                  id="config-qr-margin"
+                  type="range"
+                  min="0"
                   max="4"
                   step="1"
-                  value={config.barcodeWidth}
-                  onChange={(e) => updateField('barcodeWidth', Number(e.target.value))}
-                  className="w-full accent-indigo-600 cursor-pointer"
+                  value={config.margin}
+                  onChange={(event) => updateField('margin', Number(event.target.value))}
+                  className={rangeInputClass}
                 />
               </div>
+            </div>
+          )}
 
+          <fieldset className="grid min-w-0 grid-cols-2 gap-4">
+            <legend className="sr-only">码图颜色</legend>
+            <div>
+              <label htmlFor="config-qr-color" className="mb-1 block text-xs font-medium text-slate-700">码颜色</label>
+              <div className="flex items-center gap-2">
+                <input
+                  id="config-qr-color"
+                  type="color"
+                  value={config.qrColor}
+                  onChange={(event) => updateField('qrColor', event.target.value)}
+                  className={colorInputClass}
+                />
+                <span className="min-w-0 truncate font-mono text-xs uppercase text-slate-600">{config.qrColor}</span>
+              </div>
+            </div>
+
+            <div>
+              <label htmlFor="config-background-color" className="mb-1 block text-xs font-medium text-slate-700">背景颜色</label>
+              <div className="flex items-center gap-2">
+                <input
+                  id="config-background-color"
+                  type="color"
+                  value={config.bgColor}
+                  onChange={(event) => updateField('bgColor', event.target.value)}
+                  className={colorInputClass}
+                />
+                <span className="min-w-0 truncate font-mono text-xs uppercase text-slate-600">{config.bgColor}</span>
+              </div>
+            </div>
+          </fieldset>
+        </fieldset>
+      </div>
+
+      <div className="border-t border-slate-100 pt-4">
+        <fieldset className="min-w-0 space-y-4">
+          <legend className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+            <span className="inline-flex items-center gap-1.5">
+              <Crop className="h-3.5 w-3.5" aria-hidden="true" />
+              输出图片横纵比例 (Aspect Ratio)
+            </span>
+          </legend>
+
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+            {ASPECT_RATIOS.map((option) => {
+              const isSelected = config.aspectRatio === option.value;
+
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  aria-pressed={isSelected}
+                  onClick={() => updateField('aspectRatio', option.value)}
+                  className={`${optionButtonClass} px-2 py-2 ${
+                    isSelected
+                      ? 'border-indigo-200 bg-indigo-50 font-semibold text-indigo-700 shadow-sm'
+                      : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                  }`}
+                >
+                  {option.label}
+                </button>
+              );
+            })}
+          </div>
+
+          {config.aspectRatio === 'custom' && (
+            <fieldset className="min-w-0 space-y-2 rounded-xl border border-slate-100 bg-slate-50 p-3">
+              <legend className="px-1 text-xs font-medium text-slate-700">自定义宽高比值 (宽 : 高)</legend>
+              <div className="flex items-center gap-2">
+                <div className="min-w-0 flex-1">
+                  <label htmlFor="config-aspect-width" className="sr-only">自定义宽度比例</label>
+                  <input
+                    id="config-aspect-width"
+                    type="number"
+                    min="1"
+                    max="100"
+                    value={config.customAspectRatioWidth || 16}
+                    onChange={(event) => updateField('customAspectRatioWidth', Math.max(1, Number(event.target.value)))}
+                    className={textInputClass}
+                    placeholder="宽"
+                  />
+                </div>
+                <span className="font-bold text-slate-500" aria-hidden="true">:</span>
+                <div className="min-w-0 flex-1">
+                  <label htmlFor="config-aspect-height" className="sr-only">自定义高度比例</label>
+                  <input
+                    id="config-aspect-height"
+                    type="number"
+                    min="1"
+                    max="100"
+                    value={config.customAspectRatioHeight || 9}
+                    onChange={(event) => updateField('customAspectRatioHeight', Math.max(1, Number(event.target.value)))}
+                    className={textInputClass}
+                    placeholder="高"
+                  />
+                </div>
+              </div>
+            </fieldset>
+          )}
+        </fieldset>
+      </div>
+
+      <div className="border-t border-slate-100 pt-4">
+        <fieldset className="min-w-0 space-y-4">
+          <legend className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+            <span className="inline-flex items-center gap-1.5">
+              <Type className="h-3.5 w-3.5" aria-hidden="true" />
+              下方文本排版设置
+            </span>
+          </legend>
+
+          <label
+            htmlFor="config-show-input-text"
+            className="flex min-h-14 cursor-pointer items-center justify-between gap-3 rounded-xl border border-slate-100 bg-slate-50 p-3"
+          >
+            <span className="min-w-0">
+              <span className="block text-xs font-semibold text-slate-800">显示输入文本</span>
+              <span className="block text-[11px] leading-4 text-slate-600">统一应用于单张生成、Excel 批量预览与导出</span>
+            </span>
+            <span className="flex min-h-11 min-w-11 shrink-0 items-center justify-center">
+              <input
+                id="config-show-input-text"
+                type="checkbox"
+                role="switch"
+                checked={config.showInputText}
+                onChange={(event) => updateField('showInputText', event.target.checked)}
+                className="h-5 w-5 cursor-pointer rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+              />
+            </span>
+          </label>
+
+          {config.showInputText && (
+            <div className="grid grid-cols-2 gap-4 rounded-xl border border-slate-100 bg-slate-50/50 p-3">
               <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">
-                  条码高度 ({config.barcodeHeight}px)
+                <label htmlFor="config-input-font-size" className="block text-xs font-medium text-slate-700">
+                  文本字号 ({config.inputFontSize}px)
                 </label>
                 <input
+                  id="config-input-font-size"
                   type="range"
-                  min="40"
-                  max="160"
-                  step="5"
-                  value={config.barcodeHeight}
-                  onChange={(e) => updateField('barcodeHeight', Number(e.target.value))}
-                  className="w-full accent-indigo-600 cursor-pointer"
+                  min="10"
+                  max="24"
+                  value={config.inputFontSize}
+                  onChange={(event) => updateField('inputFontSize', Number(event.target.value))}
+                  className={rangeInputClass}
+                />
+              </div>
+              <div>
+                <label htmlFor="config-input-font-color" className="mb-1 block text-xs font-medium text-slate-700">文本字色</label>
+                <input
+                  id="config-input-font-color"
+                  type="color"
+                  value={config.inputFontColor}
+                  onChange={(event) => updateField('inputFontColor', event.target.value)}
+                  className={colorInputClass}
+                />
+              </div>
+            </div>
+          )}
+
+          <div className="space-y-3 pt-2">
+            <div>
+              <label htmlFor="config-extra-text" className="mb-1 block text-xs font-medium text-slate-700">
+                默认自定义附加文本 (可选)
+              </label>
+              <input
+                id="config-extra-text"
+                type="text"
+                placeholder="如：扫描关注 / 检验合格 / 内部标示"
+                value={config.extraText}
+                onChange={(event) => updateField('extraText', event.target.value)}
+                className={textInputClass}
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-4 rounded-xl border border-slate-100 bg-slate-50/50 p-3">
+              <div>
+                <label htmlFor="config-extra-font-size" className="block text-xs font-medium text-slate-700">
+                  附加字号 ({config.extraFontSize}px)
+                </label>
+                <input
+                  id="config-extra-font-size"
+                  type="range"
+                  min="10"
+                  max="24"
+                  value={config.extraFontSize}
+                  onChange={(event) => updateField('extraFontSize', Number(event.target.value))}
+                  className={rangeInputClass}
+                />
+              </div>
+              <div>
+                <label htmlFor="config-extra-font-color" className="mb-1 block text-xs font-medium text-slate-700">附加字色</label>
+                <input
+                  id="config-extra-font-color"
+                  type="color"
+                  value={config.extraFontColor}
+                  onChange={(event) => updateField('extraFontColor', event.target.value)}
+                  className={colorInputClass}
                 />
               </div>
             </div>
           </div>
-        ) : (
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">
-                二维码尺寸 ({config.qrSize}px)
-              </label>
-              <input
-                type="range"
-                min="120"
-                max="400"
-                step="10"
-                value={config.qrSize}
-                onChange={(e) => updateField('qrSize', Number(e.target.value))}
-                className="w-full accent-indigo-600 cursor-pointer"
-              />
-            </div>
 
+          <div className="grid grid-cols-1 gap-2 border-t border-slate-100/80 pt-2 sm:grid-cols-2 sm:gap-4">
             <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">
-                内边距 ({config.margin})
+              <label htmlFor="config-text-padding" className="block text-xs font-medium text-slate-700">
+                文本间距 ({config.textPadding}px)
               </label>
               <input
+                id="config-text-padding"
                 type="range"
                 min="0"
-                max="4"
+                max="20"
                 step="1"
-                value={config.margin}
-                onChange={(e) => updateField('margin', Number(e.target.value))}
-                className="w-full accent-indigo-600 cursor-pointer"
+                value={config.textPadding}
+                onChange={(event) => updateField('textPadding', Number(event.target.value))}
+                className={rangeInputClass}
               />
             </div>
-          </div>
-        )}
 
-        {/* 通用前景色与背景色 */}
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="block text-xs font-medium text-slate-700 mb-1">码颜色</label>
-            <div className="flex items-center gap-2">
-              <input
-                type="color"
-                value={config.qrColor}
-                onChange={(e) => updateField('qrColor', e.target.value)}
-                className="w-8 h-8 rounded border border-slate-200 cursor-pointer p-0.5"
-              />
-              <span className="text-xs text-slate-600 uppercase font-mono">{config.qrColor}</span>
-            </div>
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-slate-700 mb-1">背景颜色</label>
-            <div className="flex items-center gap-2">
-              <input
-                type="color"
-                value={config.bgColor}
-                onChange={(e) => updateField('bgColor', e.target.value)}
-                className="w-8 h-8 rounded border border-slate-200 cursor-pointer p-0.5"
-              />
-              <span className="text-xs text-slate-600 uppercase font-mono">{config.bgColor}</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* 输出图片横纵比设置 */}
-      <div className="space-y-4 pt-4 border-t border-slate-100">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-          <Crop className="w-3.5 h-3.5" />
-          输出图片横纵比例 (Aspect Ratio)
-        </h3>
-
-        <div className="grid grid-cols-3 gap-2">
-          {ASPECT_RATIOS.map((opt) => (
-            <button
-              key={opt.value}
-              type="button"
-              onClick={() => updateField('aspectRatio', opt.value)}
-              className={`py-1.5 px-2 text-xs font-medium rounded-xl border transition-all text-center ${
-                config.aspectRatio === opt.value
-                  ? 'bg-indigo-50 text-indigo-700 border-indigo-200 font-semibold shadow-sm'
-                  : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
-              }`}
-            >
-              {opt.label}
-            </button>
-          ))}
-        </div>
-
-        {/* 自定义比例数值输入 */}
-        {config.aspectRatio === 'custom' && (
-          <div className="bg-slate-50 p-3 rounded-xl border border-slate-100 space-y-2">
-            <label className="block text-xs font-medium text-slate-700">自定义宽高比值 (宽 : 高)</label>
-            <div className="flex items-center gap-2">
-              <input
-                type="number"
-                min="1"
-                max="100"
-                value={config.customAspectRatioWidth || 16}
-                onChange={(e) => updateField('customAspectRatioWidth', Math.max(1, Number(e.target.value)))}
-                className="w-full px-3 py-1.5 text-xs rounded-lg border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-                placeholder="宽"
-              />
-              <span className="text-slate-400 font-bold">:</span>
-              <input
-                type="number"
-                min="1"
-                max="100"
-                value={config.customAspectRatioHeight || 9}
-                onChange={(e) => updateField('customAspectRatioHeight', Math.max(1, Number(e.target.value)))}
-                className="w-full px-3 py-1.5 text-xs rounded-lg border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-                placeholder="高"
-              />
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* 下方文本排版 */}
-      <div className="space-y-4 pt-4 border-t border-slate-100">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-          <Type className="w-3.5 h-3.5" />
-          下方文本排版设置
-        </h3>
-
-        <div className="flex items-center justify-between bg-slate-50 p-3 rounded-xl border border-slate-100">
-          <div>
-            <span className="text-xs font-semibold text-slate-800 block">显示输入文本</span>
-            <span className="text-[11px] text-slate-500">在码下方垂直居中展示原文本内容</span>
-          </div>
-          <input
-            type="checkbox"
-            checked={config.showInputText}
-            onChange={(e) => updateField('showInputText', e.target.checked)}
-            className="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500 cursor-pointer"
-          />
-        </div>
-
-        {config.showInputText && (
-          <div className="grid grid-cols-2 gap-4 bg-slate-50/50 p-3 rounded-xl border border-slate-100">
             <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">
-                文本字号 ({config.inputFontSize}px)
+              <label htmlFor="config-padding-bottom" className="block text-xs font-medium text-slate-700">
+                画布底边距 ({config.paddingBottom}px)
               </label>
               <input
+                id="config-padding-bottom"
                 type="range"
-                min="10"
-                max="24"
-                value={config.inputFontSize}
-                onChange={(e) => updateField('inputFontSize', Number(e.target.value))}
-                className="w-full accent-indigo-600 cursor-pointer"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">文本字色</label>
-              <input
-                type="color"
-                value={config.inputFontColor}
-                onChange={(e) => updateField('inputFontColor', e.target.value)}
-                className="w-8 h-8 rounded border border-slate-200 cursor-pointer p-0.5"
+                min="0"
+                max="30"
+                step="1"
+                value={config.paddingBottom}
+                onChange={(event) => updateField('paddingBottom', Number(event.target.value))}
+                className={rangeInputClass}
               />
             </div>
           </div>
-        )}
-
-        <div className="space-y-3 pt-2">
-          <div>
-            <label className="block text-xs font-medium text-slate-700 mb-1">
-              默认自定义附加文本 (可选)
-            </label>
-            <input
-              type="text"
-              placeholder="如：扫描关注 / 检验合格 / 内部标示"
-              value={config.extraText}
-              onChange={(e) => updateField('extraText', e.target.value)}
-              className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
-            />
-          </div>
-
-          <div className="grid grid-cols-2 gap-4 bg-slate-50/50 p-3 rounded-xl border border-slate-100">
-            <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">
-                附加字号 ({config.extraFontSize}px)
-              </label>
-              <input
-                type="range"
-                min="10"
-                max="24"
-                value={config.extraFontSize}
-                onChange={(e) => updateField('extraFontSize', Number(e.target.value))}
-                className="w-full accent-indigo-600 cursor-pointer"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">附加字色</label>
-              <input
-                type="color"
-                value={config.extraFontColor}
-                onChange={(e) => updateField('extraFontColor', e.target.value)}
-                className="w-8 h-8 rounded border border-slate-200 cursor-pointer p-0.5"
-              />
-            </div>
-          </div>
-        </div>
-
-        {/* 精细间距与边距调节 */}
-        <div className="grid grid-cols-2 gap-4 pt-2 border-t border-slate-100/80">
-          <div>
-            <label className="block text-xs font-medium text-slate-700 mb-1">
-              文本间距 ({config.textPadding}px)
-            </label>
-            <input
-              type="range"
-              min="0"
-              max="20"
-              step="1"
-              value={config.textPadding}
-              onChange={(e) => updateField('textPadding', Number(e.target.value))}
-              className="w-full accent-indigo-600 cursor-pointer"
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-medium text-slate-700 mb-1">
-              画布底边距 ({config.paddingBottom}px)
-            </label>
-            <input
-              type="range"
-              min="0"
-              max="30"
-              step="1"
-              value={config.paddingBottom}
-              onChange={(e) => updateField('paddingBottom', Number(e.target.value))}
-              className="w-full accent-indigo-600 cursor-pointer"
-            />
-          </div>
-        </div>
+        </fieldset>
       </div>
     </div>
   );

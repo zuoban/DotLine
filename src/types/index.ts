@@ -33,7 +33,7 @@ export interface QrConfig {
   customAspectRatioHeight?: number;   // 自定义纵向比例数，默认 9
 
   // 文本显示设置
-  showInputText: boolean;             // 是否在码下方显示输入文本
+  showInputText: boolean;             // 单张与批量是否在码下方显示输入文本
   inputFontSize: number;              // 输入文本字号 (px)
   inputFontColor: string;             // 输入文本字色
 
@@ -62,7 +62,7 @@ export const defaultConfig: QrConfig = {
   customAspectRatioHeight: 9,
   showInputText: true,
   inputFontSize: 14,
-  inputFontColor: '#1e293b',
+  inputFontColor: '#000000',
   extraText: '',
   extraFontSize: 13,
   extraFontColor: '#000000',
@@ -73,8 +73,8 @@ export const defaultConfig: QrConfig = {
 
 export interface QrRowData {
   id: string;
+  sourceRowNumber: number;            // 原始 Excel 行号，用于导出时准确回写（含表头偏移）
   inputText: string;                  // 码内容 / 二维码文本
-  showInputText: boolean;             // 是否显示输入文本
   extraText: string;                  // 附加文本
   status?: 'pending' | 'success' | 'error';
   errorMessage?: string;
@@ -84,6 +84,5 @@ export interface QrRowData {
 
 export interface ExcelColumnMapping {
   inputTextCol: string;              // "输入文本" 列名
-  showInputTextCol?: string;         // "显示输入文本" 列名
   extraTextCol?: string;             // "附加内容" 列名
 }

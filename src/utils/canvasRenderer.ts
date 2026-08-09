@@ -8,6 +8,50 @@ export interface RenderResult {
   height: number;
 }
 
+const MAX_INPUT_LENGTH = 4096;
+const MAX_EXTRA_TEXT_LENGTH = 4096;
+const MAX_SCALE = 4;
+const MAX_CANVAS_DIMENSION = 8192;
+const MAX_CANVAS_PIXELS = 16_777_216;
+
+function getErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message) return error.message;
+  if (typeof error === 'string' && error) return error;
+  return fallback;
+}
+
+function requireNumberInRange(
+  value: number,
+  label: string,
+  min: number,
+  max: number
+): number {
+  if (!Number.isFinite(value) || value < min || value > max) {
+    throw new Error(`${label}必须是 ${min} 到 ${max} 之间的有效数值。`);
+  }
+  return value;
+}
+
+function assertCanvasSize(width: number, height: number, label: string): void {
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    throw new Error(`${label}尺寸无效，请检查尺寸与宽高比设置。`);
+  }
+
+  const roundedWidth = Math.ceil(width);
+  const roundedHeight = Math.ceil(height);
+  if (roundedWidth > MAX_CANVAS_DIMENSION || roundedHeight > MAX_CANVAS_DIMENSION) {
+    throw new Error(
+      `${label}尺寸过大（${roundedWidth} × ${roundedHeight}px），单边不能超过 ${MAX_CANVAS_DIMENSION}px；请缩短内容或调低尺寸、倍率。`
+    );
+  }
+
+  if (roundedWidth * roundedHeight > MAX_CANVAS_PIXELS) {
+    throw new Error(
+      `${label}像素总量过大（${roundedWidth} × ${roundedHeight}px）；请调低尺寸、倍率或调整宽高比。`
+    );
+  }
+}
+
 /**
  * 计算数字比例值 W / H
  */
@@ -25,13 +69,16 @@ function getTargetAspectRatio(config: QrConfig): number | null {
       return 9 / 16;
     case 'custom':
       if (
-        config.customAspectRatioWidth &&
-        config.customAspectRatioHeight &&
-        config.customAspectRatioHeight > 0
+        !Number.isFinite(config.customAspectRatioWidth) ||
+        !Number.isFinite(config.customAspectRatioHeight) ||
+        !config.customAspectRatioWidth ||
+        !config.customAspectRatioHeight ||
+        config.customAspectRatioWidth <= 0 ||
+        config.customAspectRatioHeight <= 0
       ) {
-        return config.customAspectRatioWidth / config.customAspectRatioHeight;
+        throw new Error('自定义宽高比必须使用大于 0 的有效数值。');
       }
-      return null;
+      return config.customAspectRatioWidth / config.customAspectRatioHeight;
     case 'auto':
     default:
       return null;
@@ -68,7 +115,7 @@ function wrapText(
 }
 
 /**
- * 绘制组合（二维码或一维条形码）及文字图片（支持矢量级高清倍数渲染）
+ * 绘制组合（二维码或一维条形码）及文字图片（支持高清像素倍数渲染）
  */
 export async function generateCompositeCode(
   inputText: string,
@@ -76,43 +123,92 @@ export async function generateCompositeCode(
   overrideShowInputText?: boolean,
   overrideExtraText?: string
 ): Promise<RenderResult> {
-  const scale = Math.max(1, config.scale || 2);
+  if (typeof inputText !== 'string' || !inputText.trim()) {
+    throw new Error('请输入要生成的内容，内容不能只包含空白字符。');
+  }
+
+  const trimmedInput = inputText.trim();
+  if (inputText.length > MAX_INPUT_LENGTH) {
+    throw new Error(`生成内容过长，最多支持 ${MAX_INPUT_LENGTH} 个字符。`);
+  }
+
+  const scale = requireNumberInRange(config.scale ?? 2, '清晰度倍率', 1, MAX_SCALE);
+  const margin = requireNumberInRange(config.margin, '码图边距', 0, 64);
   const showInput = overrideShowInputText ?? config.showInputText;
-  const extraTextToDraw =
+  const resolvedExtraText =
     overrideExtraText !== undefined && overrideExtraText !== null
       ? overrideExtraText
       : config.extraText;
+  if (typeof resolvedExtraText !== 'string') {
+    throw new Error('附加文本必须是字符串。');
+  }
+  if (resolvedExtraText.length > MAX_EXTRA_TEXT_LENGTH) {
+    throw new Error(`附加文本过长，最多支持 ${MAX_EXTRA_TEXT_LENGTH} 个字符。`);
+  }
+  const extraTextToDraw = resolvedExtraText;
+
+  const inputFontSize = showInput
+    ? requireNumberInRange(config.inputFontSize, '输入文本字号', 1, 256)
+    : config.inputFontSize;
+  const extraFontSize = extraTextToDraw
+    ? requireNumberInRange(config.extraFontSize, '附加文本字号', 1, 256)
+    : config.extraFontSize;
+  const textPadding = requireNumberInRange(config.textPadding, '文本间距', 0, 2048);
+  const paddingBottom = requireNumberInRange(config.paddingBottom, '画布底边距', 0, 2048);
 
   const codeCanvas = document.createElement('canvas');
 
   // 1. 离屏绘制基础码图 (带高清比例乘以 scale)
   if (config.codeMode === 'barcode') {
-    const rawText = inputText.trim() || '12345678';
+    const barcodeWidth = requireNumberInRange(config.barcodeWidth, '条码线宽', 0.1, 16);
+    const barcodeHeight = requireNumberInRange(config.barcodeHeight, '条码高度', 1, 2048);
+    const scaledBarcodeWidth = Math.max(1, barcodeWidth * scale);
+    const scaledBarcodeHeight = Math.max(20, barcodeHeight * scale);
+    const scaledBarcodeMargin = margin * 3 * scale;
+
+    // JsBarcode 会先分配画布；用保守的模块数估算拦截明显超大的输入。
+    const estimatedWidth =
+      (trimmedInput.length * 16 + 128) * scaledBarcodeWidth + scaledBarcodeMargin * 2;
+    const estimatedHeight = scaledBarcodeHeight + scaledBarcodeMargin * 2;
+    assertCanvasSize(estimatedWidth, estimatedHeight, '条码画布');
+
     try {
-      JsBarcode(codeCanvas, rawText, {
+      JsBarcode(codeCanvas, trimmedInput, {
         format: config.barcodeFormat,
-        width: Math.max(1, config.barcodeWidth * scale),
-        height: Math.max(20, config.barcodeHeight * scale),
-        margin: config.margin * 3 * scale,
+        width: scaledBarcodeWidth,
+        height: scaledBarcodeHeight,
+        margin: scaledBarcodeMargin,
         displayValue: false,
         background: config.bgColor,
         lineColor: config.qrColor,
       });
-    } catch (err: any) {
-      throw new Error(`条码生成失败 [${config.barcodeFormat}]: ${err.message || '内容格式不匹配'}`);
+    } catch (error: unknown) {
+      throw new Error(
+        `条码生成失败 [${config.barcodeFormat}]：${getErrorMessage(error, '内容格式不匹配')}`
+      );
     }
   } else {
     // 二维码
-    await QRCode.toCanvas(codeCanvas, inputText || ' ', {
-      width: config.qrSize * scale,
-      margin: config.margin,
-      color: {
-        dark: config.qrColor,
-        light: config.bgColor,
-      },
-      errorCorrectionLevel: 'M',
-    });
+    const qrSize = requireNumberInRange(config.qrSize, '二维码尺寸', 32, 2048);
+    const scaledQrSize = qrSize * scale;
+    assertCanvasSize(scaledQrSize, scaledQrSize, '二维码画布');
+
+    try {
+      await QRCode.toCanvas(codeCanvas, inputText, {
+        width: scaledQrSize,
+        margin,
+        color: {
+          dark: config.qrColor,
+          light: config.bgColor,
+        },
+        errorCorrectionLevel: 'M',
+      });
+    } catch (error: unknown) {
+      throw new Error(`二维码生成失败：${getErrorMessage(error, '内容格式不受支持')}`);
+    }
   }
+
+  assertCanvasSize(codeCanvas.width, codeCanvas.height, '码图画布');
 
   // 2. 测量内容的自然基础尺寸 (放大 scale 倍)
   const measureCanvas = document.createElement('canvas');
@@ -123,15 +219,15 @@ export async function generateCompositeCode(
   const naturalWidth = Math.max(codeCanvas.width, minNaturalWidth);
   const textMaxWidth = Math.max(naturalWidth - 16 * scale, 100 * scale);
 
-  const scaledInputFontSize = config.inputFontSize * scale;
-  const scaledExtraFontSize = config.extraFontSize * scale;
-  const scaledTextPadding = config.textPadding * scale;
-  const scaledPaddingBottom = config.paddingBottom * scale;
+  const scaledInputFontSize = inputFontSize * scale;
+  const scaledExtraFontSize = extraFontSize * scale;
+  const scaledTextPadding = textPadding * scale;
+  const scaledPaddingBottom = paddingBottom * scale;
 
   let inputLines: string[] = [];
   let extraLines: string[] = [];
 
-  if (showInput && inputText) {
+  if (showInput) {
     measureCtx.font = `${scaledInputFontSize}px ${config.fontFamily}`;
     inputLines = wrapText(measureCtx, inputText, textMaxWidth);
   }
@@ -171,6 +267,8 @@ export async function generateCompositeCode(
     }
   }
 
+  assertCanvasSize(finalWidth, finalHeight, '最终画布');
+
   // 4. 创建并绘制高清最终画布
   const canvas = document.createElement('canvas');
   const ctx = canvas.getContext('2d');
@@ -192,7 +290,12 @@ export async function generateCompositeCode(
     const targetCodeWidth = Math.max(finalWidth - 32 * scale, codeCanvas.width);
     const codeX = Math.round((finalWidth - targetCodeWidth) / 2);
     const codeY = offsetY;
+    const previousImageSmoothing = ctx.imageSmoothingEnabled;
+    if (targetCodeWidth !== codeCanvas.width) {
+      ctx.imageSmoothingEnabled = false;
+    }
     ctx.drawImage(codeCanvas, codeX, codeY, targetCodeWidth, codeCanvas.height);
+    ctx.imageSmoothingEnabled = previousImageSmoothing;
   } else {
     const codeX = offsetX + Math.round((naturalWidth - codeCanvas.width) / 2);
     const codeY = offsetY;
@@ -230,11 +333,15 @@ export async function generateCompositeCode(
     }
   }
 
-  return {
-    dataUrl: canvas.toDataURL('image/png'),
-    width: canvas.width,
-    height: canvas.height,
-  };
+  try {
+    return {
+      dataUrl: canvas.toDataURL('image/png'),
+      width: canvas.width,
+      height: canvas.height,
+    };
+  } catch (error: unknown) {
+    throw new Error(`图片导出失败：${getErrorMessage(error, '浏览器无法处理当前画布尺寸')}`);
+  }
 }
 
 /**
