@@ -1,0 +1,12 @@
+{
+  "maxRegressionPercent": 15,
+  "maxMainThreadGapMs": 500,
+  "maxCancelResponseMs": 500,
+  "maxMainThreadHeapMb": 512,
+  "cases": {
+    "100": { "maxParseMs": 4000, "maxExportMs": 20000 },
+    "500": { "maxParseMs": 7000, "maxExportMs": 60000 },
+    "1000": { "maxParseMs": 10000, "maxExportMs": 120000 },
+    "2000": { "maxParseMs": 15000, "maxExportMs": 240000 }
+  }
+}

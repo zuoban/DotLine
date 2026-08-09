@@ -16,6 +16,8 @@
     "typecheck:e2e": "tsc -p tsconfig.e2e.json --noEmit",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
+    "benchmark:batch": "playwright test --config playwright.performance.config.ts",
+    "benchmark:compare": "node benchmarks/compare-results.mjs",
     "check": "npm run lint && npm run typecheck:e2e && npm run test && npm run build",
     "preview": "vite preview"
   },

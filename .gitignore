@@ -4,6 +4,7 @@ coverage
 playwright-report
 test-results
 blob-report
+performance-results
 .DS_Store
 .antigravitycli
 *.local

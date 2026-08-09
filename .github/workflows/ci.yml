@@ -7,6 +7,7 @@ on:
     tags: ['v*.*.*']
 
 permissions:
+  actions: read
   contents: read
 
 jobs:
@@ -45,6 +46,55 @@ jobs:
             playwright-report/
             test-results/
           retention-days: 7
+
+  performance:
+    if: ${{ github.event_name == 'pull_request' || github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build production app
+        run: npm run build
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Download latest main performance baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run_id="$(gh run list --workflow ci.yml --branch main --status success --limit 1 --json databaseId --jq '.[0].databaseId')"
+          if [ -n "$run_id" ]; then
+            gh run download "$run_id" --name performance-report --dir performance-baseline || true
+          fi
+
+      - name: Run batch performance benchmark
+        run: npm run benchmark:batch
+
+      - name: Compare performance baseline
+        env:
+          PERFORMANCE_BASELINE_PATH: performance-baseline/batch-performance.json
+        run: npm run benchmark:compare
+
+      - name: Upload performance report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-report
+          path: performance-results/*.json
+          retention-days: 30
 
   build-and-push:
     if: ${{ github.event_name == 'push' }}
