@@ -8,6 +8,8 @@ export interface RenderResult {
   height: number;
 }
 
+type RenderCanvas = HTMLCanvasElement | OffscreenCanvas;
+
 const MAX_INPUT_LENGTH = 4096;
 const MAX_EXTRA_TEXT_LENGTH = 4096;
 const MAX_SCALE = 4;
@@ -19,6 +21,33 @@ function getErrorMessage(error: unknown, fallback: string): string {
   if (error instanceof Error && error.message) return error.message;
   if (typeof error === 'string' && error) return error;
   return fallback;
+}
+
+function createRenderCanvas(): RenderCanvas {
+  if (typeof OffscreenCanvas !== 'undefined' && typeof document === 'undefined') {
+    return new OffscreenCanvas(1, 1);
+  }
+  if (typeof document !== 'undefined') return document.createElement('canvas');
+  throw new Error('当前环境不支持 Canvas 渲染');
+}
+
+function getRenderContext(canvas: RenderCanvas): CanvasRenderingContext2D {
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('Canvas 2D context不可用');
+  return context as unknown as CanvasRenderingContext2D;
+}
+
+async function canvasToPngDataUrl(canvas: RenderCanvas): Promise<string> {
+  if ('toDataURL' in canvas) return canvas.toDataURL('image/png');
+
+  const blob = await canvas.convertToBlob({ type: 'image/png' });
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  const chunks: string[] = [];
+  const chunkSize = 32_768;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    chunks.push(String.fromCharCode(...bytes.subarray(offset, offset + chunkSize)));
+  }
+  return `data:image/png;base64,${globalThis.btoa(chunks.join(''))}`;
 }
 
 function parseHexColor(value: string): [number, number, number] | null {
@@ -196,7 +225,7 @@ export async function generateCompositeCode(
   const textPadding = requireNumberInRange(config.textPadding, '文本间距', 0, 2048);
   const paddingBottom = requireNumberInRange(config.paddingBottom, '画布底边距', 0, 2048);
 
-  const codeCanvas = document.createElement('canvas');
+  const codeCanvas = createRenderCanvas();
 
   // 1. 离屏绘制基础码图 (带高清比例乘以 scale)
   if (config.codeMode === 'barcode') {
@@ -213,7 +242,7 @@ export async function generateCompositeCode(
     assertCanvasSize(estimatedWidth, estimatedHeight, '条码画布');
 
     try {
-      JsBarcode(codeCanvas, trimmedInput, {
+      JsBarcode(codeCanvas as HTMLCanvasElement, trimmedInput, {
         format: config.barcodeFormat,
         width: scaledBarcodeWidth,
         height: scaledBarcodeHeight,
@@ -234,7 +263,7 @@ export async function generateCompositeCode(
     assertCanvasSize(scaledQrSize, scaledQrSize, '二维码画布');
 
     try {
-      await QRCode.toCanvas(codeCanvas, inputText, {
+      await QRCode.toCanvas(codeCanvas as HTMLCanvasElement, inputText, {
         width: scaledQrSize,
         margin,
         color: {
@@ -251,9 +280,8 @@ export async function generateCompositeCode(
   assertCanvasSize(codeCanvas.width, codeCanvas.height, '码图画布');
 
   // 2. 测量内容的自然基础尺寸 (放大 scale 倍)
-  const measureCanvas = document.createElement('canvas');
-  const measureCtx = measureCanvas.getContext('2d');
-  if (!measureCtx) throw new Error('Canvas 2D context不可用');
+  const measureCanvas = createRenderCanvas();
+  const measureCtx = getRenderContext(measureCanvas);
 
   const minNaturalWidth = (config.codeMode === 'barcode' ? 220 : config.qrSize) * scale;
   const naturalWidth = Math.max(codeCanvas.width, minNaturalWidth);
@@ -310,9 +338,8 @@ export async function generateCompositeCode(
   assertCanvasSize(finalWidth, finalHeight, '最终画布');
 
   // 4. 创建并绘制高清最终画布
-  const canvas = document.createElement('canvas');
-  const ctx = canvas.getContext('2d');
-  if (!ctx) throw new Error('Canvas 2D context不可用');
+  const canvas = createRenderCanvas();
+  const ctx = getRenderContext(canvas);
 
   canvas.width = finalWidth;
   canvas.height = finalHeight;
@@ -375,7 +402,7 @@ export async function generateCompositeCode(
 
   try {
     return {
-      dataUrl: canvas.toDataURL('image/png'),
+      dataUrl: await canvasToPngDataUrl(canvas),
       width: canvas.width,
       height: canvas.height,
     };

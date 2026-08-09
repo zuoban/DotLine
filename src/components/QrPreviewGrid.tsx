@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { QrConfig, QrRowData } from '../types';
-import { generateCompositeCode } from '../utils/canvasRenderer';
+import { renderCompositeCode } from '../utils/renderClient';
 
 interface QrPreviewGridProps {
   rows: QrRowData[];
@@ -38,6 +38,7 @@ export const QrPreviewGrid: React.FC<QrPreviewGridProps> = ({ rows, config }) =>
 
   useEffect(() => {
     const version = renderVersionRef.current + 1;
+    const controller = new AbortController();
     renderVersionRef.current = version;
     setIsRendering(rows.length > 0);
 
@@ -65,11 +66,12 @@ export const QrPreviewGrid: React.FC<QrPreviewGridProps> = ({ rows, config }) =>
           const row = pendingRows[index];
           let renderedRow: QrRowData;
           try {
-            const res = await generateCompositeCode(
+            const res = await renderCompositeCode(
               row.inputText,
               previewConfig,
               config.showInputText,
-              row.extraText
+              row.extraText,
+              controller.signal,
             );
             renderedRow = {
               ...row,
@@ -118,6 +120,7 @@ export const QrPreviewGrid: React.FC<QrPreviewGridProps> = ({ rows, config }) =>
     }, PREVIEW_DEBOUNCE_MS);
 
     return () => {
+      controller.abort();
       window.clearTimeout(debounceTimer);
       if (renderVersionRef.current === version) {
         renderVersionRef.current += 1;

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Download, QrCode as QrIcon, Barcode as BarcodeIcon, Copy, Check, AlertCircle } from 'lucide-react';
 import { QrConfig } from '../types';
-import { generateCompositeCode } from '../utils/canvasRenderer';
+import { renderCompositeCode } from '../utils/renderClient';
 import saveAs from 'file-saver';
 
 interface SingleQrTabProps {
@@ -44,6 +44,7 @@ export const SingleQrTab: React.FC<SingleQrTabProps> = ({ config }) => {
 
   useEffect(() => {
     let active = true;
+    const controller = new AbortController();
     setIsGenerating(true);
     setPreviewUrl('');
     setErrorMessage('');
@@ -53,7 +54,13 @@ export const SingleQrTab: React.FC<SingleQrTabProps> = ({ config }) => {
       setIsGenerating(true);
       try {
         const extra = customExtraText || config.extraText;
-        const res = await generateCompositeCode(inputText, config, config.showInputText, extra);
+        const res = await renderCompositeCode(
+          inputText,
+          config,
+          config.showInputText,
+          extra,
+          controller.signal,
+        );
         if (active) {
           setPreviewUrl(res.dataUrl);
         }
@@ -69,6 +76,7 @@ export const SingleQrTab: React.FC<SingleQrTabProps> = ({ config }) => {
 
     return () => {
       active = false;
+      controller.abort();
       window.clearTimeout(timer);
     };
   }, [inputText, customExtraText, config]);

@@ -17,8 +17,8 @@ const { saveAsMock, generateCompositeCodeMock } = vi.hoisted(() => ({
 }));
 
 vi.mock('file-saver', () => ({ default: saveAsMock }));
-vi.mock('./canvasRenderer', () => ({
-  generateCompositeCode: generateCompositeCodeMock,
+vi.mock('./renderClient', () => ({
+  renderCompositeCode: generateCompositeCodeMock,
 }));
 
 import {

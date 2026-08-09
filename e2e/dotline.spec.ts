@@ -1,5 +1,13 @@
-import { expect, test, type Download, type Page } from '@playwright/test';
+import { expect, test, type Download, type Locator, type Page } from '@playwright/test';
 import ExcelJS from 'exceljs';
+import {
+  BarcodeFormat,
+  BinaryBitmap,
+  DecodeHintType,
+  HybridBinarizer,
+  MultiFormatReader,
+  RGBLuminanceSource,
+} from '@zxing/library';
 
 async function openApp(page: Page): Promise<void> {
   await page.emulateMedia({ reducedMotion: 'reduce' });
@@ -51,6 +59,39 @@ async function expectNoHorizontalOverflow(page: Page): Promise<void> {
     .toBe(true);
 }
 
+async function decodeGeneratedImage(image: Locator, format: BarcodeFormat): Promise<string> {
+  const pixels = await image.evaluate(async (element) => {
+    const source = element as HTMLImageElement;
+    await source.decode();
+    const canvas = document.createElement('canvas');
+    canvas.width = source.naturalWidth;
+    canvas.height = source.naturalHeight;
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('测试环境无法创建 Canvas context');
+    context.drawImage(source, 0, 0);
+    const rgba = context.getImageData(0, 0, canvas.width, canvas.height).data;
+    const luminance = new Array<number>(canvas.width * canvas.height);
+    for (let sourceIndex = 0, targetIndex = 0; sourceIndex < rgba.length; sourceIndex += 4) {
+      luminance[targetIndex] = Math.round(
+        (rgba[sourceIndex] + 2 * rgba[sourceIndex + 1] + rgba[sourceIndex + 2]) / 4,
+      );
+      targetIndex += 1;
+    }
+    return { width: canvas.width, height: canvas.height, luminance };
+  });
+
+  const source = new RGBLuminanceSource(
+    Uint8ClampedArray.from(pixels.luminance),
+    pixels.width,
+    pixels.height,
+  );
+  const bitmap = new BinaryBitmap(new HybridBinarizer(source));
+  const hints = new Map();
+  hints.set(DecodeHintType.POSSIBLE_FORMATS, [format]);
+  hints.set(DecodeHintType.TRY_HARDER, true);
+  return new MultiFormatReader().decode(bitmap, hints).getText();
+}
+
 test('默认二维码使用黑色文本并可下载 PNG', async ({ page }) => {
   await openApp(page);
 
@@ -70,6 +111,51 @@ test('默认二维码使用黑色文本并可下载 PNG', async ({ page }) => {
 
   expect(download.suggestedFilename()).toMatch(/^qrcode_\d+\.png$/);
   expect(await download.failure()).toBeNull();
+});
+
+test('码图渲染运行在独立 Web Worker 中', async ({ page }) => {
+  const workerPromise = page.waitForEvent('worker');
+  await openApp(page);
+  const worker = await workerPromise;
+
+  expect(worker.url()).toContain('codeRenderer.worker');
+  await expect(page.getByRole('img', { name: /^二维码预览：/ })).toBeVisible();
+});
+
+test('生成后的二维码可以反向解码为原始内容', async ({ page }) => {
+  await openApp(page);
+  const value = 'https://example.com/scan-verification';
+  await page.getByLabel(/输入生成内容 \/ 序列号 \/ 网址/).fill(value);
+  const image = page.getByRole('img', { name: `二维码预览：${value}`, exact: true });
+  await expect(image).toBeVisible();
+
+  expect(await decodeGeneratedImage(image, BarcodeFormat.QR_CODE)).toBe(value);
+});
+
+test('常用一维码生成后可以反向解码', async ({ page }) => {
+  await openApp(page);
+  await page.getByRole('button', { name: /一维条码/ }).click();
+  const input = page.getByLabel(/输入生成内容 \/ 序列号 \/ 网址/);
+  const cases = [
+    { option: 'CODE128', value: 'SN987654321', format: BarcodeFormat.CODE_128 },
+    { option: 'CODE39', value: 'DOTLINE-2026', format: BarcodeFormat.CODE_39 },
+    { option: 'EAN13', value: '6901234567892', format: BarcodeFormat.EAN_13 },
+    { option: 'EAN8', value: '12345670', format: BarcodeFormat.EAN_8 },
+    { option: 'UPC', value: '123456789012', format: BarcodeFormat.UPC_A },
+    { option: 'ITF14', value: '12345678901231', format: BarcodeFormat.ITF },
+  ] as const;
+
+  for (const barcodeCase of cases) {
+    await page.getByLabel('条码编码标准', { exact: true }).selectOption(barcodeCase.option);
+    await page.getByRole('button', { name: '使用示例', exact: true }).click();
+    await expect(input).toHaveValue(barcodeCase.value);
+    const image = page.getByRole('img', {
+      name: `条形码预览：${barcodeCase.value}`,
+      exact: true,
+    });
+    await expect(image).toBeVisible();
+    expect(await decodeGeneratedImage(image, barcodeCase.format)).toBe(barcodeCase.value);
+  }
 });
 
 test('Pharmacode 示例会生成有效条形码', async ({ page }) => {

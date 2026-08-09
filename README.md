@@ -1,6 +1,6 @@
 # DotLine - 批量二维码 / 一维条码生成与 Excel 嵌入器
 
-[![Docker Build & Push](https://github.com/zuoban/DotLine/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/zuoban/DotLine/actions/workflows/docker-publish.yml)
+[![Quality checks and release](https://github.com/zuoban/DotLine/actions/workflows/ci.yml/badge.svg)](https://github.com/zuoban/DotLine/actions/workflows/ci.yml)
 [![GitHub License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Docker Image](https://img.shields.io/badge/docker-ghcr.io%2Fzuoban%2Fdotline-blue)](https://github.com/zuoban/DotLine/pkgs/container/dotline)
 
@@ -25,6 +25,7 @@
 ### 2. 🎨 高清分辨率与排版比例 (Aspect Ratio)
 - **高清放大倍率 (HD Scale)**：支持 `1x (标准~300px)`、`2x (高清~600px)`、`3x (超清~1000px)` 及 `4x (印刷高清~1400px)` 像素级缩放绘制。
 - **Canvas 比例裁切扩张**：支持 `自动自适应`、`1:1`、`4:3`、`3:2`、`16:9`、`9:16` 及 `自定义比例` 设置，填充画幅的同时保证二维码/条码矩阵零变形。
+- **后台渲染**：支持的浏览器会通过 Web Worker + OffscreenCanvas 生成码图，减少批量任务对页面交互的阻塞；不支持时自动回退。
 
 ### 3. 📝 下方文字与附加文本美化
 - **双层文本排版**：支持同步在码图下方展示原输入文本及自定义附加文本（如：`扫描关注` / `内部标识`）。
@@ -86,7 +87,7 @@ npm run check
 
 - **前端框架**：React 18 + TypeScript + Vite
 - **UI & 样式**：Tailwind CSS + Lucide Icons
-- **图形与二维码绘制**：QRCode.js + JsBarcode + HTML5 Canvas Composite Rendering
+- **图形与二维码绘制**：QRCode.js + JsBarcode + Web Worker / OffscreenCanvas Composite Rendering
 - **Excel 处理与嵌入**：ExcelJS + FileSaver.js + JSZip
 - **容器与 CI/CD**：Docker (Nginx Alpine Multi-stage) + GitHub Actions
 

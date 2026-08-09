@@ -2,7 +2,7 @@ import ExcelJS from 'exceljs';
 import saveAs from 'file-saver';
 import JSZip from 'jszip';
 import { QrConfig, QrRowData } from '../types';
-import { generateCompositeCode } from './canvasRenderer';
+import { renderCompositeCode } from './renderClient';
 import {
   MAX_BATCH_RENDER_PIXELS,
   MAX_IMPORT_ROWS,
@@ -741,11 +741,12 @@ export async function exportExcelWithQRImages(
       usedSourceRows.add(sourceRowNumber);
       if (!item.inputText.trim()) throw new Error('输入内容为空');
 
-      const { dataUrl, width, height } = await generateCompositeCode(
+      const { dataUrl, width, height } = await renderCompositeCode(
         item.inputText,
         config,
         config.showInputText,
-        item.extraText
+        item.extraText,
+        signal,
       );
 
       const imageId = workbook.addImage({
@@ -867,11 +868,12 @@ export async function downloadImagesZip(
       }
       if (!item.inputText.trim()) throw new Error('输入内容为空');
 
-      const { dataUrl } = await generateCompositeCode(
+      const { dataUrl } = await renderCompositeCode(
         item.inputText,
         config,
         config.showInputText,
-        item.extraText
+        item.extraText,
+        signal,
       );
       const safeName = (item.extraText || item.inputText || `code_${i + 1}`)
         .replace(/[\\/:*?"<>|]/g, '_')
