@@ -20,6 +20,30 @@ export interface BatchExportResult {
   errors: string[];
 }
 
+export type ExcelTaskStage =
+  | 'reading'
+  | 'validating'
+  | 'loading'
+  | 'parsing'
+  | 'creating'
+  | 'rendering'
+  | 'serializing';
+
+export interface ParsedExcelFile {
+  rows: QrRowData[];
+  headers: string[];
+  inputTextCol: string;
+  worksheetName: string;
+  headerRowNumber: number;
+  ignoredShowInputCol?: string;
+  extraTextCol?: string;
+}
+
+export interface BuiltExcelExport {
+  buffer: ArrayBuffer;
+  result: BatchExportResult;
+}
+
 interface ZipEntryWithSize extends JSZip.JSZipObject {
   _data?: {
     uncompressedSize?: number;
@@ -58,12 +82,20 @@ function pngDataUrlToBuffer(dataUrl: string): ArrayBuffer {
   return bytes.buffer as ArrayBuffer;
 }
 
-async function loadWorkbookFile(file: File): Promise<ExcelJS.Workbook> {
+async function loadWorkbookFile(
+  file: File,
+  onStage?: (stage: ExcelTaskStage) => void,
+  signal?: AbortSignal,
+): Promise<ExcelJS.Workbook> {
+  throwIfAborted(signal);
   if (file.size > MAX_XLSX_FILE_SIZE) {
     throw new Error('文件超过 25MB，请拆分后再导入。');
   }
 
+  onStage?.('reading');
   const arrayBuffer = await file.arrayBuffer();
+  throwIfAborted(signal);
+  onStage?.('validating');
   const archive = await JSZip.loadAsync(arrayBuffer);
   const archiveEntries = Object.values(archive.files);
   if (archiveEntries.length > MAX_XLSX_ENTRIES) {
@@ -79,9 +111,17 @@ async function loadWorkbookFile(file: File): Promise<ExcelJS.Workbook> {
     }
   }
 
+  throwIfAborted(signal);
+  onStage?.('loading');
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(arrayBuffer);
+  throwIfAborted(signal);
   return workbook;
+}
+
+function normalizeWorkbookBuffer(buffer: ExcelJS.Buffer): ArrayBuffer {
+  const bytes = new Uint8Array(buffer as ArrayBufferLike);
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
 }
 
 function getConfiguredAspectRatio(config: QrConfig): number | null {
@@ -521,7 +561,12 @@ function getExcelRowNumber(item: QrRowData): number | undefined {
 /**
  * 1. 下载标准模版
  */
-export async function downloadExcelTemplate() {
+export async function buildExcelTemplate(
+  onStage?: (stage: ExcelTaskStage) => void,
+  signal?: AbortSignal,
+): Promise<ArrayBuffer> {
+  throwIfAborted(signal);
+  onStage?.('creating');
   const workbook = new ExcelJS.Workbook();
   const worksheet = workbook.addWorksheet('码图批量导入模版');
 
@@ -563,7 +608,18 @@ export async function downloadExcelTemplate() {
     });
   });
 
-  const buffer = await workbook.xlsx.writeBuffer();
+  throwIfAborted(signal);
+  onStage?.('serializing');
+  const buffer = normalizeWorkbookBuffer(await workbook.xlsx.writeBuffer());
+  throwIfAborted(signal);
+  return buffer;
+}
+
+export async function downloadExcelTemplate(
+  onStage?: (stage: ExcelTaskStage) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const buffer = await buildExcelTemplate(onStage, signal);
   const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
   saveAs(blob, '条码_二维码导入模版.xlsx');
 }
@@ -571,16 +627,14 @@ export async function downloadExcelTemplate() {
 /**
  * 2. 解析上传的 Excel 文件
  */
-export async function parseExcelFile(file: File): Promise<{
-  rows: QrRowData[];
-  headers: string[];
-  inputTextCol: string;
-  worksheetName: string;
-  headerRowNumber: number;
-  ignoredShowInputCol?: string;
-  extraTextCol?: string;
-}> {
-  const workbook = await loadWorkbookFile(file);
+export async function parseExcelFile(
+  file: File,
+  onStage?: (stage: ExcelTaskStage) => void,
+  signal?: AbortSignal,
+): Promise<ParsedExcelFile> {
+  const workbook = await loadWorkbookFile(file, onStage, signal);
+  throwIfAborted(signal);
+  onStage?.('parsing');
   const selection = findWorksheetAndHeader(workbook);
   if (!selection) {
     throw new Error(
@@ -604,6 +658,7 @@ export async function parseExcelFile(file: File): Promise<{
   const rows: QrRowData[] = [];
 
   worksheet.eachRow((row, rowNumber) => {
+    throwIfAborted(signal);
     if (rowNumber <= headerRowNumber) return;
 
     const rawInputText = cellToText(row.getCell(inputTextColIdx)).trim();
@@ -643,16 +698,18 @@ export async function parseExcelFile(file: File): Promise<{
 /**
  * 3. 导入数据生成并导出包含嵌入图片的 Excel 文件（基于实际生成的图片宽高比自适应算磅值和列宽）
  */
-export async function exportExcelWithQRImages(
+export async function buildExcelWithQRImages(
   file: File,
   rowsData: QrRowData[],
   config: QrConfig,
   onProgress?: (index: number, total: number) => void,
-  signal?: AbortSignal
-): Promise<BatchExportResult> {
+  signal?: AbortSignal,
+  onStage?: (stage: ExcelTaskStage) => void,
+  renderer: typeof renderCompositeCode = renderCompositeCode,
+): Promise<BuiltExcelExport> {
   throwIfAborted(signal);
   assertBatchWorkload(rowsData, config);
-  const workbook = await loadWorkbookFile(file);
+  const workbook = await loadWorkbookFile(file, onStage, signal);
   throwIfAborted(signal);
 
   const sourceSheetName = rowsData.find((item) => item.sourceSheetName)?.sourceSheetName;
@@ -714,6 +771,7 @@ export async function exportExcelWithQRImages(
   const usedSourceRows = new Set<number>();
   let exportedCount = 0;
 
+  onStage?.('rendering');
   for (let i = 0; i < total; i++) {
     throwIfAborted(signal);
     const item = rowsData[i];
@@ -741,7 +799,7 @@ export async function exportExcelWithQRImages(
       usedSourceRows.add(sourceRowNumber);
       if (!item.inputText.trim()) throw new Error('输入内容为空');
 
-      const { dataUrl, width, height } = await renderCompositeCode(
+      const { dataUrl, width, height } = await renderer(
         item.inputText,
         config,
         config.showInputText,
@@ -832,11 +890,36 @@ export async function exportExcelWithQRImages(
   const dynamicColWidth = Math.max(Math.ceil(maxRenderedWidth / 6.8) + 3, isBarcode ? 36 : 24);
   worksheet.getColumn(imageColIndex).width = dynamicColWidth;
 
-  const buffer = await workbook.xlsx.writeBuffer();
+  throwIfAborted(signal);
+  onStage?.('serializing');
+  const buffer = normalizeWorkbookBuffer(await workbook.xlsx.writeBuffer());
+  throwIfAborted(signal);
+  return {
+    buffer,
+    result: { exportedCount, errors: rowErrors },
+  };
+}
+
+export async function exportExcelWithQRImages(
+  file: File,
+  rowsData: QrRowData[],
+  config: QrConfig,
+  onProgress?: (index: number, total: number) => void,
+  signal?: AbortSignal,
+  onStage?: (stage: ExcelTaskStage) => void,
+): Promise<BatchExportResult> {
+  const { buffer, result } = await buildExcelWithQRImages(
+    file,
+    rowsData,
+    config,
+    onProgress,
+    signal,
+    onStage,
+  );
   const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-  const label = isBarcode ? '条形码' : '二维码';
+  const label = config.codeMode === 'barcode' ? '条形码' : '二维码';
   saveAs(blob, `批量${label}导出_${Date.now()}.xlsx`);
-  return { exportedCount, errors: rowErrors };
+  return result;
 }
 
 /**

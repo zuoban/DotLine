@@ -193,14 +193,19 @@ test('样式设置会跨刷新保存并可一键恢复默认', async ({ page }) 
   await expect(page.getByLabel(/二维码尺寸/)).toHaveValue('220');
 });
 
-test('下载的 Excel 模板只包含输入文本和附加内容', async ({ page }) => {
+test('Excel 模板在独立 Worker 中生成且只包含输入文本和附加内容', async ({ page }) => {
   await openApp(page);
 
   await page.getByRole('tab', { name: /Excel 批量/ }).click();
+  const workerPromise = page.waitForEvent('worker', {
+    predicate: (worker) => worker.url().includes('excelProcessor.worker'),
+  });
   const downloadPromise = page.waitForEvent('download');
   await page.getByRole('button', { name: '下载 Excel 模板文件 (.xlsx)', exact: true }).click();
+  const worker = await workerPromise;
   const download = await downloadPromise;
 
+  expect(worker.url()).toContain('excelProcessor.worker');
   expect(download.suggestedFilename()).toBe('条码_二维码导入模版.xlsx');
   expect(await download.failure()).toBeNull();
 
@@ -230,12 +235,17 @@ test('页面开关统一覆盖旧 Excel 列且空白行不会打乱导出位置'
   await expect(showInputTextSwitch).not.toBeChecked();
 
   const buffer = await createLegacyBlankRowWorkbook();
+  const parseWorkerPromise = page.waitForEvent('worker', {
+    predicate: (worker) => worker.url().includes('excelProcessor.worker'),
+  });
   await page.locator('#excel-file-upload').setInputFiles({
     name: 'blank-row-fixture.xlsx',
     mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     buffer,
   });
+  const parseWorker = await parseWorkerPromise;
 
+  expect(parseWorker.url()).toContain('excelProcessor.worker');
   await expect(page.getByText(/^成功读取 2 条数据记录/)).toBeVisible();
   await expect(
     page.getByRole('status').filter({ hasText: '已忽略 Excel 中的“显示输入文本”列，显示规则以页面开关为准。' }),
@@ -280,10 +290,15 @@ test('页面开关统一覆盖旧 Excel 列且空白行不会打乱导出位置'
     })
     .toBe(true);
 
+  const exportWorkerPromise = page.waitForEvent('worker', {
+    predicate: (worker) => worker.url().includes('excelProcessor.worker'),
+  });
   const downloadPromise = page.waitForEvent('download');
   await page.getByRole('button', { name: '导出包含二维码的 Excel', exact: true }).click();
+  const exportWorker = await exportWorkerPromise;
   const download = await downloadPromise;
 
+  expect(exportWorker.url()).toContain('excelProcessor.worker');
   expect(download.suggestedFilename()).toMatch(/^批量二维码导出_\d+\.xlsx$/);
   expect(await download.failure()).toBeNull();
 

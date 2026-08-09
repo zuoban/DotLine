@@ -3,6 +3,7 @@ import { Download, FileSpreadsheet, Upload, FolderArchive, RefreshCw, Layers, Ch
 import { QrConfig, QrRowData } from '../types';
 import { QrPreviewGrid } from './QrPreviewGrid';
 import { MAX_IMPORT_ROWS, MAX_XLSX_FILE_SIZE } from '../utils/batchLimits';
+import type { ExcelTaskStage } from '../utils/excelHandler';
 
 interface BatchExcelTabProps {
   config: QrConfig;
@@ -14,6 +15,19 @@ function getErrorMessage(error: unknown): string {
 
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === 'AbortError';
+}
+
+function getExcelStageText(stage: ExcelTaskStage): string {
+  switch (stage) {
+    case 'reading': return '正在读取 Excel 文件...';
+    case 'validating': return '正在检查 Excel 文件安全性...';
+    case 'loading': return '正在后台加载工作簿...';
+    case 'parsing': return '正在后台识别工作表和数据列...';
+    case 'creating': return '正在后台创建 Excel 模板...';
+    case 'rendering': return '正在后台生成码图并写入工作表...';
+    case 'serializing': return '正在后台生成最终 Excel 文件...';
+    default: return '正在后台处理 Excel...';
+  }
 }
 
 export const BatchExcelTab: React.FC<BatchExcelTabProps> = ({ config }) => {
@@ -72,9 +86,15 @@ export const BatchExcelTab: React.FC<BatchExcelTabProps> = ({ config }) => {
     setStatusMessage(null);
     setProgressText('正在安全解析 Excel 文件...');
     setProgress(null);
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
     try {
-      const { parseExcelFile } = await import('../utils/excelHandler');
-      const res = await parseExcelFile(file);
+      const { parseExcelFile } = await import('../utils/excelClient');
+      const res = await parseExcelFile(
+        file,
+        (stage) => setProgressText(getExcelStageText(stage)),
+        controller.signal,
+      );
       if (res.rows.length === 0) {
         throw new Error('没有找到可生成码图的有效数据行');
       }
@@ -94,14 +114,19 @@ export const BatchExcelTab: React.FC<BatchExcelTabProps> = ({ config }) => {
         msg: `成功读取 ${res.rows.length} 条数据记录${ignoredColumnMessage}`,
       });
     } catch (err: unknown) {
-      console.error(err);
-      setSelectedFile(null);
-      setRows([]);
-      setInputTextCol('');
-      setWorksheetName('');
-      setHeaderRowNumber(1);
-      setStatusMessage({ type: 'error', msg: `解析 Excel 失败：${getErrorMessage(err)}` });
+      if (isAbortError(err)) {
+        setStatusMessage({ type: 'info', msg: '已取消 Excel 解析。' });
+      } else {
+        console.error(err);
+        setSelectedFile(null);
+        setRows([]);
+        setInputTextCol('');
+        setWorksheetName('');
+        setHeaderRowNumber(1);
+        setStatusMessage({ type: 'error', msg: `解析 Excel 失败：${getErrorMessage(err)}` });
+      }
     } finally {
+      if (abortControllerRef.current === controller) abortControllerRef.current = null;
       setIsLoading(false);
       setProgressText('');
     }
@@ -116,16 +141,26 @@ export const BatchExcelTab: React.FC<BatchExcelTabProps> = ({ config }) => {
   };
 
   const handleDownloadTemplate = async () => {
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
     setIsLoading(true);
     setStatusMessage(null);
     setProgressText('正在生成 Excel 模板...');
     try {
-      const { downloadExcelTemplate } = await import('../utils/excelHandler');
-      await downloadExcelTemplate();
+      const { downloadExcelTemplate } = await import('../utils/excelClient');
+      await downloadExcelTemplate(
+        (stage) => setProgressText(getExcelStageText(stage)),
+        controller.signal,
+      );
       setStatusMessage({ type: 'success', msg: 'Excel 模板已开始下载。' });
     } catch (err: unknown) {
-      setStatusMessage({ type: 'error', msg: `模板生成失败：${getErrorMessage(err)}` });
+      if (isAbortError(err)) {
+        setStatusMessage({ type: 'info', msg: '已取消 Excel 模板生成。' });
+      } else {
+        setStatusMessage({ type: 'error', msg: `模板生成失败：${getErrorMessage(err)}` });
+      }
     } finally {
+      if (abortControllerRef.current === controller) abortControllerRef.current = null;
       setIsLoading(false);
       setProgressText('');
     }
@@ -142,7 +177,7 @@ export const BatchExcelTab: React.FC<BatchExcelTabProps> = ({ config }) => {
     const label = isBarcode ? '条码图片' : '二维码图片';
     setProgressText(`正在生成合成${label}并插入 Excel 单元格...`);
     try {
-      const { exportExcelWithQRImages } = await import('../utils/excelHandler');
+      const { exportExcelWithQRImages } = await import('../utils/excelClient');
       const result = await exportExcelWithQRImages(
         selectedFile,
         effectiveRows,
@@ -152,6 +187,7 @@ export const BatchExcelTab: React.FC<BatchExcelTabProps> = ({ config }) => {
           setProgressText(`处理中 (${current}/${total})...`);
         },
         controller.signal,
+        (stage) => setProgressText(getExcelStageText(stage)),
       );
       const skippedMessage = result.errors.length > 0
         ? `，另有 ${result.errors.length} 行失败，错误原因已写入导出表格`
@@ -282,7 +318,16 @@ export const BatchExcelTab: React.FC<BatchExcelTabProps> = ({ config }) => {
       {isLoading && progressText && rows.length === 0 && (
         <div role="status" aria-live="polite" className="bg-indigo-50 border border-indigo-100 p-3 rounded-xl flex items-center gap-3 text-sm text-indigo-800">
           <RefreshCw className="w-4 h-4 animate-spin motion-reduce:animate-none" />
-          <span>{progressText}</span>
+          <span className="flex-1">{progressText}</span>
+          {abortControllerRef.current && (
+            <button
+              type="button"
+              onClick={handleCancel}
+              className="min-h-11 rounded-lg border border-indigo-200 bg-white px-3 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+            >
+              取消任务
+            </button>
+          )}
         </div>
       )}
 
