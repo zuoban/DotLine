@@ -13,11 +13,50 @@ const MAX_EXTRA_TEXT_LENGTH = 4096;
 const MAX_SCALE = 4;
 const MAX_CANVAS_DIMENSION = 8192;
 const MAX_CANVAS_PIXELS = 16_777_216;
+const MIN_CODE_CONTRAST_RATIO = 3;
 
 function getErrorMessage(error: unknown, fallback: string): string {
   if (error instanceof Error && error.message) return error.message;
   if (typeof error === 'string' && error) return error;
   return fallback;
+}
+
+function parseHexColor(value: string): [number, number, number] | null {
+  const normalized = value.trim().replace(/^#/, '');
+  const expanded = normalized.length === 3
+    ? normalized.split('').map((character) => `${character}${character}`).join('')
+    : normalized.slice(0, 6);
+  if (!/^[0-9a-f]{6}$/i.test(expanded)) return null;
+  return [
+    Number.parseInt(expanded.slice(0, 2), 16),
+    Number.parseInt(expanded.slice(2, 4), 16),
+    Number.parseInt(expanded.slice(4, 6), 16),
+  ];
+}
+
+function relativeLuminance([red, green, blue]: [number, number, number]): number {
+  const linearize = (channel: number) => {
+    const value = channel / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * linearize(red) + 0.7152 * linearize(green) + 0.0722 * linearize(blue);
+}
+
+function assertCodeContrast(foreground: string, background: string): void {
+  const foregroundRgb = parseHexColor(foreground);
+  const backgroundRgb = parseHexColor(background);
+  if (!foregroundRgb || !backgroundRgb) return;
+
+  const foregroundLuminance = relativeLuminance(foregroundRgb);
+  const backgroundLuminance = relativeLuminance(backgroundRgb);
+  const contrastRatio =
+    (Math.max(foregroundLuminance, backgroundLuminance) + 0.05) /
+    (Math.min(foregroundLuminance, backgroundLuminance) + 0.05);
+  if (contrastRatio < MIN_CODE_CONTRAST_RATIO) {
+    throw new Error(
+      `码颜色与背景颜色对比度不足（${contrastRatio.toFixed(2)}:1），可能无法扫描；请使用更深的码颜色或更浅的背景色。`
+    );
+  }
 }
 
 function requireNumberInRange(
@@ -146,6 +185,7 @@ export async function generateCompositeCode(
     throw new Error(`附加文本过长，最多支持 ${MAX_EXTRA_TEXT_LENGTH} 个字符。`);
   }
   const extraTextToDraw = resolvedExtraText;
+  assertCodeContrast(config.qrColor, config.bgColor);
 
   const inputFontSize = showInput
     ? requireNumberInRange(config.inputFontSize, '输入文本字号', 1, 256)

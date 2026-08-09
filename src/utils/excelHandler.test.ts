@@ -92,4 +92,47 @@ describe('parseExcelFile', () => {
     expect(result.inputTextCol).toBe('商品条码');
     expect(result.rows[0].inputText).toBe('A001');
   });
+
+  it('skips a cover sheet and discovers a header row below title content', async () => {
+    const workbook = new ExcelJS.Workbook();
+    const coverSheet = workbook.addWorksheet('说明');
+    coverSheet.getCell('A1').value = '二维码';
+
+    const dataSheet = workbook.addWorksheet('商品数据');
+    dataSheet.getCell('A1').value = '2026 商品导入清单';
+    dataSheet.addRow([]);
+    dataSheet.getRow(3).values = ['输入文本', '附加内容'];
+    dataSheet.getRow(4).values = ['A001', '第一条'];
+    dataSheet.getRow(5).values = ['B002', '第二条'];
+
+    const result = await parseExcelFile(await workbookFile(workbook));
+
+    expect(result.worksheetName).toBe('商品数据');
+    expect(result.headerRowNumber).toBe(3);
+    expect(result.rows).toMatchObject([
+      {
+        sourceSheetName: '商品数据',
+        sourceHeaderRowNumber: 3,
+        sourceRowNumber: 4,
+        inputText: 'A001',
+      },
+      {
+        sourceSheetName: '商品数据',
+        sourceHeaderRowNumber: 3,
+        sourceRowNumber: 5,
+        inputText: 'B002',
+      },
+    ]);
+  });
+
+  it('stops parsing as soon as the effective row limit is exceeded', async () => {
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Data');
+    worksheet.addRow(['输入文本']);
+    for (let index = 0; index < 2001; index += 1) {
+      worksheet.addRow([`ROW-${index + 1}`]);
+    }
+
+    await expect(parseExcelFile(await workbookFile(workbook))).rejects.toThrow('有效数据超过 2000 行');
+  });
 });

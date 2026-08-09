@@ -1,28 +1,40 @@
-import React, { useMemo, useState } from 'react';
-import { Download, FileSpreadsheet, Upload, FolderArchive, RefreshCw, Layers, CheckCircle2, AlertCircle } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Download, FileSpreadsheet, Upload, FolderArchive, RefreshCw, Layers, CheckCircle2, AlertCircle, XCircle } from 'lucide-react';
 import { QrConfig, QrRowData } from '../types';
 import { QrPreviewGrid } from './QrPreviewGrid';
+import { MAX_IMPORT_ROWS, MAX_XLSX_FILE_SIZE } from '../utils/batchLimits';
 
 interface BatchExcelTabProps {
   config: QrConfig;
 }
 
-const MAX_FILE_SIZE = 25 * 1024 * 1024;
-const MAX_ROWS = 2000;
-
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : '发生未知错误';
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError';
 }
 
 export const BatchExcelTab: React.FC<BatchExcelTabProps> = ({ config }) => {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [rows, setRows] = useState<QrRowData[]>([]);
   const [inputTextCol, setInputTextCol] = useState<string>('');
+  const [worksheetName, setWorksheetName] = useState<string>('');
+  const [headerRowNumber, setHeaderRowNumber] = useState<number>(1);
 
   const [isLoading, setIsLoading] = useState(false);
   const [progressText, setProgressText] = useState<string>('');
   const [progress, setProgress] = useState<{ current: number; total: number } | null>(null);
-  const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
+  const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error' | 'info'; msg: string } | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  useEffect(
+    () => () => {
+      abortControllerRef.current?.abort();
+    },
+    [],
+  );
 
   const isBarcode = config.codeMode === 'barcode';
   const effectiveRows = useMemo(
@@ -40,14 +52,18 @@ export const BatchExcelTab: React.FC<BatchExcelTabProps> = ({ config }) => {
       setSelectedFile(null);
       setRows([]);
       setInputTextCol('');
+      setWorksheetName('');
+      setHeaderRowNumber(1);
       setStatusMessage({ type: 'error', msg: '请选择 .xlsx 文件；旧版 .xls 暂不支持。' });
       return;
     }
 
-    if (file.size > MAX_FILE_SIZE) {
+    if (file.size > MAX_XLSX_FILE_SIZE) {
       setSelectedFile(null);
       setRows([]);
       setInputTextCol('');
+      setWorksheetName('');
+      setHeaderRowNumber(1);
       setStatusMessage({ type: 'error', msg: '文件超过 25MB，请拆分后再导入。' });
       return;
     }
@@ -62,12 +78,14 @@ export const BatchExcelTab: React.FC<BatchExcelTabProps> = ({ config }) => {
       if (res.rows.length === 0) {
         throw new Error('没有找到可生成码图的有效数据行');
       }
-      if (res.rows.length > MAX_ROWS) {
-        throw new Error(`检测到 ${res.rows.length} 行数据，单次最多支持 ${MAX_ROWS} 行，请拆分文件`);
+      if (res.rows.length > MAX_IMPORT_ROWS) {
+        throw new Error(`检测到 ${res.rows.length} 行数据，单次最多支持 ${MAX_IMPORT_ROWS} 行，请拆分文件`);
       }
       setSelectedFile(file);
       setRows(res.rows);
       setInputTextCol(res.inputTextCol);
+      setWorksheetName(res.worksheetName);
+      setHeaderRowNumber(res.headerRowNumber);
       const ignoredColumnMessage = res.ignoredShowInputCol
         ? `\n已忽略 Excel 中的“${res.ignoredShowInputCol}”列，显示规则以页面开关为准。`
         : '';
@@ -80,6 +98,8 @@ export const BatchExcelTab: React.FC<BatchExcelTabProps> = ({ config }) => {
       setSelectedFile(null);
       setRows([]);
       setInputTextCol('');
+      setWorksheetName('');
+      setHeaderRowNumber(1);
       setStatusMessage({ type: 'error', msg: `解析 Excel 失败：${getErrorMessage(err)}` });
     } finally {
       setIsLoading(false);
@@ -114,6 +134,8 @@ export const BatchExcelTab: React.FC<BatchExcelTabProps> = ({ config }) => {
   // 1. 导出嵌入二维码/条码的 Excel 文件
   const handleExportExcel = async () => {
     if (!selectedFile || rows.length === 0) return;
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
     setIsLoading(true);
     setStatusMessage(null);
     setProgress({ current: 0, total: rows.length });
@@ -121,15 +143,32 @@ export const BatchExcelTab: React.FC<BatchExcelTabProps> = ({ config }) => {
     setProgressText(`正在生成合成${label}并插入 Excel 单元格...`);
     try {
       const { exportExcelWithQRImages } = await import('../utils/excelHandler');
-      await exportExcelWithQRImages(selectedFile, effectiveRows, config, (current, total) => {
-        setProgress({ current, total });
-        setProgressText(`处理中 (${current}/${total})...`);
+      const result = await exportExcelWithQRImages(
+        selectedFile,
+        effectiveRows,
+        config,
+        (current, total) => {
+          setProgress({ current, total });
+          setProgressText(`处理中 (${current}/${total})...`);
+        },
+        controller.signal,
+      );
+      const skippedMessage = result.errors.length > 0
+        ? `，另有 ${result.errors.length} 行失败，错误原因已写入导出表格`
+        : '';
+      setStatusMessage({
+        type: 'success',
+        msg: `成功导出 ${result.exportedCount} 张${label}${skippedMessage}。`,
       });
-      setStatusMessage({ type: 'success', msg: `成功导出包含嵌入${label}的 Excel 表格！` });
     } catch (err: unknown) {
-      console.error(err);
-      setStatusMessage({ type: 'error', msg: `导出 Excel 失败：${getErrorMessage(err)}` });
+      if (isAbortError(err)) {
+        setStatusMessage({ type: 'info', msg: '已取消 Excel 导出，未下载不完整文件。' });
+      } else {
+        console.error(err);
+        setStatusMessage({ type: 'error', msg: `导出 Excel 失败：${getErrorMessage(err)}` });
+      }
     } finally {
+      if (abortControllerRef.current === controller) abortControllerRef.current = null;
       setIsLoading(false);
       setProgressText('');
       setProgress(null);
@@ -139,25 +178,49 @@ export const BatchExcelTab: React.FC<BatchExcelTabProps> = ({ config }) => {
   // 2. 导出图片 ZIP 包
   const handleExportZip = async () => {
     if (rows.length === 0) return;
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
     setIsLoading(true);
     setStatusMessage(null);
     setProgress({ current: 0, total: rows.length });
     setProgressText('正在打包码图 ZIP 压缩包...');
     try {
       const { downloadImagesZip } = await import('../utils/excelHandler');
-      await downloadImagesZip(effectiveRows, config, (current, total) => {
-        setProgress({ current, total });
-        setProgressText(`打包中 (${current}/${total})...`);
+      const result = await downloadImagesZip(
+        effectiveRows,
+        config,
+        (current, total) => {
+          setProgress({ current, total });
+          setProgressText(`打包中 (${current}/${total})...`);
+        },
+        controller.signal,
+      );
+      const skippedMessage = result.errors.length > 0
+        ? `，${result.errors.length} 行失败记录已包含在压缩包中`
+        : '';
+      setStatusMessage({
+        type: 'success',
+        msg: `已打包 ${result.exportedCount} 张码图${skippedMessage}。`,
       });
-      setStatusMessage({ type: 'success', msg: '批量图片压缩包下载成功！' });
     } catch (err: unknown) {
-      console.error(err);
-      setStatusMessage({ type: 'error', msg: `打包下载失败：${getErrorMessage(err)}` });
+      if (isAbortError(err)) {
+        setStatusMessage({ type: 'info', msg: '已取消 ZIP 打包，未下载不完整文件。' });
+      } else {
+        console.error(err);
+        setStatusMessage({ type: 'error', msg: `打包下载失败：${getErrorMessage(err)}` });
+      }
     } finally {
+      if (abortControllerRef.current === controller) abortControllerRef.current = null;
       setIsLoading(false);
       setProgressText('');
       setProgress(null);
     }
+  };
+
+  const handleCancel = () => {
+    if (!abortControllerRef.current) return;
+    setProgressText('正在取消当前任务...');
+    abortControllerRef.current.abort();
   };
 
   return (
@@ -229,13 +292,17 @@ export const BatchExcelTab: React.FC<BatchExcelTabProps> = ({ config }) => {
           role={statusMessage.type === 'error' ? 'alert' : 'status'}
           aria-live="polite"
           className={`max-h-52 overflow-y-auto whitespace-pre-line break-words p-4 rounded-xl border flex items-start gap-2.5 text-sm font-medium ${
-          statusMessage.type === 'success'
-            ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-            : 'bg-red-50 text-red-800 border-red-200'
-        }`}
+            statusMessage.type === 'success'
+              ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+              : statusMessage.type === 'info'
+                ? 'bg-blue-50 text-blue-800 border-blue-200'
+                : 'bg-red-50 text-red-800 border-red-200'
+          }`}
         >
           {statusMessage.type === 'success' ? (
             <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+          ) : statusMessage.type === 'info' ? (
+            <XCircle className="w-4 h-4 text-blue-600 shrink-0" />
           ) : (
             <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
           )}
@@ -253,7 +320,9 @@ export const BatchExcelTab: React.FC<BatchExcelTabProps> = ({ config }) => {
                 <h3 className="font-semibold text-slate-800 text-base">
                   数据记录预览与【{isBarcode ? `一维条码 - ${config.barcodeFormat}` : '二维码'}】排版预览
                 </h3>
-                <p className="text-xs text-slate-600">已识别 {rows.length} 行数据，内容读取主列：[{inputTextCol}]</p>
+                <p className="text-xs text-slate-600">
+                  已识别 {rows.length} 行数据 · 工作表：[{worksheetName}] · 表头第 {headerRowNumber} 行 · 主列：[{inputTextCol}]
+                </p>
               </div>
             </div>
 
@@ -284,7 +353,16 @@ export const BatchExcelTab: React.FC<BatchExcelTabProps> = ({ config }) => {
             <div role="status" aria-live="polite" className="bg-indigo-50 border border-indigo-100 p-3 rounded-xl space-y-2 text-sm text-indigo-800">
               <div className="flex items-center gap-3">
                 <RefreshCw className="w-4 h-4 animate-spin motion-reduce:animate-none" />
-                <span>{progressText}</span>
+                <span className="flex-1">{progressText}</span>
+                {abortControllerRef.current && (
+                  <button
+                    type="button"
+                    onClick={handleCancel}
+                    className="min-h-11 rounded-lg border border-indigo-200 bg-white px-3 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+                  >
+                    取消任务
+                  </button>
+                )}
               </div>
               {progress && progress.total > 0 && (
                 <progress

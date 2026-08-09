@@ -1,0 +1,7 @@
+export const MAX_XLSX_FILE_SIZE = 25 * 1024 * 1024;
+export const MAX_XLSX_UNCOMPRESSED_SIZE = 256 * 1024 * 1024;
+export const MAX_XLSX_ENTRIES = 10_000;
+export const MAX_IMPORT_ROWS = 2_000;
+export const MAX_SOURCE_ROW_NUMBER = 100_000;
+export const MAX_BATCH_RENDER_PIXELS = 800_000_000;
+

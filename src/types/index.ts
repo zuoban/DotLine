@@ -55,7 +55,7 @@ export const defaultConfig: QrConfig = {
   qrSize: 220,
   qrColor: '#000000',
   bgColor: '#ffffff',
-  margin: 1,
+  margin: 4,
   scale: 2,                           // 默认 2x 高清导出
   aspectRatio: 'auto',
   customAspectRatioWidth: 16,
@@ -74,6 +74,8 @@ export const defaultConfig: QrConfig = {
 export interface QrRowData {
   id: string;
   sourceRowNumber: number;            // 原始 Excel 行号，用于导出时准确回写（含表头偏移）
+  sourceSheetName?: string;           // 原始工作表名称，兼容多工作表文件
+  sourceHeaderRowNumber?: number;     // 原始表头行号，兼容标题行和说明行
   inputText: string;                  // 码内容 / 二维码文本
   extraText: string;                  // 附加文本
   status?: 'pending' | 'success' | 'error';

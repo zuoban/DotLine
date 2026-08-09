@@ -1,8 +1,9 @@
-import { lazy, Suspense, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { Header } from './components/Header';
 import { ConfigPanel } from './components/ConfigPanel';
 import { SingleQrTab } from './components/SingleQrTab';
 import { defaultConfig, QrConfig } from './types';
+import { loadStoredConfig, saveStoredConfig } from './utils/configStorage';
 
 const BatchExcelTab = lazy(() =>
   import('./components/BatchExcelTab').then(({ BatchExcelTab: Component }) => ({
@@ -30,7 +31,11 @@ function BatchTabLoading() {
 
 export function App() {
   const [activeTab, setActiveTab] = useState<'single' | 'batch'>('single');
-  const [config, setConfig] = useState<QrConfig>(defaultConfig);
+  const [config, setConfig] = useState<QrConfig>(loadStoredConfig);
+
+  useEffect(() => {
+    saveStoredConfig(config);
+  }, [config]);
 
   return (
     <div className="min-h-screen bg-slate-50/70 flex flex-col">
@@ -55,7 +60,11 @@ export function App() {
 
           {/* 桌面端左侧公共样式配置面板 (占据 4 列) */}
           <aside className="order-2 lg:order-1 lg:col-span-4 lg:sticky lg:top-24" aria-label="生成样式设置">
-            <ConfigPanel config={config} onChange={setConfig} />
+            <ConfigPanel
+              config={config}
+              onChange={setConfig}
+              onReset={() => setConfig({ ...defaultConfig })}
+            />
           </aside>
         </div>
       </main>

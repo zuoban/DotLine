@@ -89,6 +89,24 @@ test('Pharmacode 示例会生成有效条形码', async ({ page }) => {
   await expect(page.getByRole('alert')).toHaveCount(0);
 });
 
+test('样式设置会跨刷新保存并可一键恢复默认', async ({ page }) => {
+  await openApp(page);
+
+  const qrSize = page.getByLabel(/二维码尺寸/);
+  await qrSize.fill('300');
+  await expect(qrSize).toHaveValue('300');
+
+  await page.reload();
+  await expect(page.getByLabel(/二维码尺寸/)).toHaveValue('300');
+
+  await page.getByRole('button', { name: '恢复默认', exact: true }).click();
+  await expect(page.getByLabel(/二维码尺寸/)).toHaveValue('220');
+  await expect(page.getByLabel(/内边距/)).toHaveValue('4');
+
+  await page.reload();
+  await expect(page.getByLabel(/二维码尺寸/)).toHaveValue('220');
+});
+
 test('下载的 Excel 模板只包含输入文本和附加内容', async ({ page }) => {
   await openApp(page);
 
@@ -136,7 +154,11 @@ test('页面开关统一覆盖旧 Excel 列且空白行不会打乱导出位置'
   await expect(
     page.getByRole('status').filter({ hasText: '已忽略 Excel 中的“显示输入文本”列，显示规则以页面开关为准。' }),
   ).toBeVisible();
-  await expect(page.getByText('已识别 2 行数据，内容读取主列：[输入文本]', { exact: true })).toBeVisible();
+  await expect(
+    page.getByText('已识别 2 行数据 · 工作表：[数据] · 表头第 1 行 · 主列：[输入文本]', {
+      exact: true,
+    }),
+  ).toBeVisible();
   await expect(page.getByText('预览生成完成，共 2 条。', { exact: true })).toBeVisible();
   await expect(page.getByRole('img', { name: /第 \d+ 个二维码预览/ })).toHaveCount(2);
   await expect(page.getByText('ROW-2', { exact: true })).toBeVisible();

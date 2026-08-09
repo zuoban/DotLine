@@ -3,6 +3,146 @@ import saveAs from 'file-saver';
 import JSZip from 'jszip';
 import { QrConfig, QrRowData } from '../types';
 import { generateCompositeCode } from './canvasRenderer';
+import {
+  MAX_BATCH_RENDER_PIXELS,
+  MAX_IMPORT_ROWS,
+  MAX_SOURCE_ROW_NUMBER,
+  MAX_XLSX_ENTRIES,
+  MAX_XLSX_FILE_SIZE,
+  MAX_XLSX_UNCOMPRESSED_SIZE,
+} from './batchLimits';
+
+const BATCH_YIELD_INTERVAL = 8;
+const MAX_HEADER_SCAN_ROWS = 20;
+
+export interface BatchExportResult {
+  exportedCount: number;
+  errors: string[];
+}
+
+interface ZipEntryWithSize extends JSZip.JSZipObject {
+  _data?: {
+    uncompressedSize?: number;
+  };
+}
+
+function createAbortError(): Error {
+  const error = new Error('操作已取消');
+  error.name = 'AbortError';
+  return error;
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw createAbortError();
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError';
+}
+
+function yieldToBrowser(): Promise<void> {
+  return new Promise((resolve) => globalThis.setTimeout(resolve, 0));
+}
+
+function pngDataUrlToBuffer(dataUrl: string): ArrayBuffer {
+  const separatorIndex = dataUrl.indexOf(',');
+  if (separatorIndex < 0 || !dataUrl.slice(0, separatorIndex).includes(';base64')) {
+    throw new Error('生成的 PNG 数据格式无效');
+  }
+
+  const binary = globalThis.atob(dataUrl.slice(separatorIndex + 1));
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes.buffer as ArrayBuffer;
+}
+
+async function loadWorkbookFile(file: File): Promise<ExcelJS.Workbook> {
+  if (file.size > MAX_XLSX_FILE_SIZE) {
+    throw new Error('文件超过 25MB，请拆分后再导入。');
+  }
+
+  const arrayBuffer = await file.arrayBuffer();
+  const archive = await JSZip.loadAsync(arrayBuffer);
+  const archiveEntries = Object.values(archive.files);
+  if (archiveEntries.length > MAX_XLSX_ENTRIES) {
+    throw new Error(`Excel 压缩包包含过多文件（${archiveEntries.length} 个），请精简后重试。`);
+  }
+
+  let uncompressedSize = 0;
+  for (const entry of archiveEntries) {
+    const size = (entry as ZipEntryWithSize)._data?.uncompressedSize;
+    if (Number.isFinite(size)) uncompressedSize += size ?? 0;
+    if (uncompressedSize > MAX_XLSX_UNCOMPRESSED_SIZE) {
+      throw new Error('Excel 解压后超过 256MB，为避免浏览器内存不足，请拆分文件。');
+    }
+  }
+
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(arrayBuffer);
+  return workbook;
+}
+
+function getConfiguredAspectRatio(config: QrConfig): number | null {
+  switch (config.aspectRatio) {
+    case '1:1': return 1;
+    case '4:3': return 4 / 3;
+    case '3:2': return 3 / 2;
+    case '16:9': return 16 / 9;
+    case '9:16': return 9 / 16;
+    case 'custom': {
+      const width = config.customAspectRatioWidth ?? 0;
+      const height = config.customAspectRatioHeight ?? 0;
+      return width > 0 && height > 0 ? width / height : null;
+    }
+    default: return null;
+  }
+}
+
+function estimateRenderPixels(item: QrRowData, config: QrConfig): number {
+  const scale = Math.max(1, Math.min(config.scale || 1, 4));
+  const margin = Math.max(0, config.margin || 0);
+  const codeWidth = config.codeMode === 'qr'
+    ? config.qrSize * scale
+    : (item.inputText.length * 16 + 128) * config.barcodeWidth * scale + margin * 6 * scale;
+  const codeHeight = config.codeMode === 'qr'
+    ? config.qrSize * scale
+    : config.barcodeHeight * scale + margin * 6 * scale;
+  const naturalWidth = Math.max(codeWidth, (config.codeMode === 'qr' ? config.qrSize : 220) * scale);
+  const averageCharacterWidth = Math.max(config.inputFontSize, config.extraFontSize) * scale * 0.65;
+  const charactersPerLine = Math.max(1, Math.floor((naturalWidth - 16 * scale) / averageCharacterWidth));
+  const inputLines = config.showInputText ? Math.ceil(item.inputText.length / charactersPerLine) : 0;
+  const extraLines = item.extraText ? Math.ceil(item.extraText.length / charactersPerLine) : 0;
+  const textHeight =
+    inputLines * config.inputFontSize * scale * 1.2 +
+    extraLines * config.extraFontSize * scale * 1.2 +
+    (inputLines + extraLines > 0 ? (config.textPadding + config.paddingBottom) * scale : 0);
+  let width = naturalWidth;
+  let height = codeHeight + textHeight;
+  const targetRatio = getConfiguredAspectRatio(config);
+
+  if (targetRatio && targetRatio > 0 && width > 0 && height > 0) {
+    if (width / height > targetRatio) height = width / targetRatio;
+    else width = height * targetRatio;
+  }
+
+  const pixels = Math.ceil(width) * Math.ceil(height);
+  return Number.isFinite(pixels) ? pixels : MAX_BATCH_RENDER_PIXELS + 1;
+}
+
+function assertBatchWorkload(rowsData: QrRowData[], config: QrConfig): void {
+  let totalPixels = 0;
+  for (const item of rowsData) {
+    totalPixels += estimateRenderPixels(item, config);
+    if (totalPixels > MAX_BATCH_RENDER_PIXELS) {
+      const estimatedMegapixels = Math.ceil(totalPixels / 1_000_000);
+      throw new Error(
+        `当前批量任务预计至少需要处理 ${estimatedMegapixels} 百万像素，超出浏览器安全预算；请降低清晰度、图片尺寸或拆分数据。`
+      );
+    }
+  }
+}
 
 const INPUT_HEADER_ALIASES = [
   '输入文本',
@@ -280,8 +420,8 @@ function cellToText(cell: ExcelJS.Cell): string {
   return displayText || String(resolvedValue);
 }
 
-function readHeaders(worksheet: ExcelJS.Worksheet): string[] {
-  const headerRow = worksheet.getRow(1);
+function readHeaders(worksheet: ExcelJS.Worksheet, headerRowNumber = 1): string[] {
+  const headerRow = worksheet.getRow(headerRowNumber);
   const columnCount = Math.max(headerRow.cellCount, worksheet.columnCount);
   return Array.from({ length: columnCount }, (_, index) => cellToText(headerRow.getCell(index + 1)).trim());
 }
@@ -321,6 +461,45 @@ function findInputColumn(headers: string[]): number {
     );
   });
   return fuzzyColumn >= 0 ? fuzzyColumn + 1 : -1;
+}
+
+function findWorksheetAndHeader(workbook: ExcelJS.Workbook): {
+  worksheet: ExcelJS.Worksheet;
+  headerRowNumber: number;
+  headers: string[];
+  inputTextColIdx: number;
+} | null {
+  let fallback: {
+    worksheet: ExcelJS.Worksheet;
+    headerRowNumber: number;
+    headers: string[];
+    inputTextColIdx: number;
+  } | null = null;
+
+  for (const worksheet of workbook.worksheets) {
+    const lastHeaderRow = Math.min(Math.max(worksheet.rowCount, 1), MAX_HEADER_SCAN_ROWS);
+    for (let headerRowNumber = 1; headerRowNumber <= lastHeaderRow; headerRowNumber += 1) {
+      const headers = readHeaders(worksheet, headerRowNumber);
+      const inputTextColIdx = findInputColumn(headers);
+      if (inputTextColIdx < 1) continue;
+
+      const candidate = { worksheet, headerRowNumber, headers, inputTextColIdx };
+      fallback ??= candidate;
+      let hasInputData = false;
+      worksheet.eachRow((row, rowNumber) => {
+        if (
+          !hasInputData &&
+          rowNumber > headerRowNumber &&
+          cellToText(row.getCell(inputTextColIdx)).trim()
+        ) {
+          hasInputData = true;
+        }
+      });
+      if (hasInputData) return candidate;
+    }
+  }
+
+  return fallback;
 }
 
 function getErrorMessage(error: unknown): string {
@@ -396,23 +575,22 @@ export async function parseExcelFile(file: File): Promise<{
   rows: QrRowData[];
   headers: string[];
   inputTextCol: string;
+  worksheetName: string;
+  headerRowNumber: number;
   ignoredShowInputCol?: string;
   extraTextCol?: string;
 }> {
-  const arrayBuffer = await file.arrayBuffer();
-  const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(arrayBuffer);
-
-  const worksheet = workbook.worksheets[0];
-  if (!worksheet) {
-    throw new Error('Excel 文件中没有找到可用工作表');
-  }
-
-  const headers = readHeaders(worksheet);
-  const inputTextColIdx = findInputColumn(headers);
-  if (inputTextColIdx < 1) {
+  const workbook = await loadWorkbookFile(file);
+  const selection = findWorksheetAndHeader(workbook);
+  if (!selection) {
     throw new Error(
-      '未找到有效的输入内容列。请将表头命名为“输入文本”“输入内容”“条码内容”“二维码内容”或“URL”等明确名称。'
+      `未找到有效的输入内容列：已检查所有工作表的前 ${MAX_HEADER_SCAN_ROWS} 行。请将表头命名为“输入文本”“输入内容”“条码内容”“二维码内容”或“URL”等明确名称。`
+    );
+  }
+  const { worksheet, headerRowNumber, headers, inputTextColIdx } = selection;
+  if (worksheet.rowCount > MAX_SOURCE_ROW_NUMBER) {
+    throw new Error(
+      `工作表使用范围达到第 ${worksheet.rowCount} 行，超过安全上限 ${MAX_SOURCE_ROW_NUMBER} 行；请清理多余空白行或拆分文件。`
     );
   }
 
@@ -426,7 +604,7 @@ export async function parseExcelFile(file: File): Promise<{
   const rows: QrRowData[] = [];
 
   worksheet.eachRow((row, rowNumber) => {
-    if (rowNumber === 1) return;
+    if (rowNumber <= headerRowNumber) return;
 
     const rawInputText = cellToText(row.getCell(inputTextColIdx)).trim();
     if (!rawInputText) return;
@@ -436,9 +614,15 @@ export async function parseExcelFile(file: File): Promise<{
       extraText = cellToText(row.getCell(extraTextColIdx)).trim();
     }
 
+    if (rows.length >= MAX_IMPORT_ROWS) {
+      throw new Error(`有效数据超过 ${MAX_IMPORT_ROWS} 行，请拆分文件后再导入。`);
+    }
+
     rows.push({
-      id: `row_${rowNumber}_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+      id: `sheet_${worksheet.id}_row_${rowNumber}`,
       sourceRowNumber: rowNumber,
+      sourceSheetName: worksheet.name,
+      sourceHeaderRowNumber: headerRowNumber,
       inputText: rawInputText,
       extraText,
       status: 'pending',
@@ -449,6 +633,8 @@ export async function parseExcelFile(file: File): Promise<{
     rows,
     headers,
     inputTextCol,
+    worksheetName: worksheet.name,
+    headerRowNumber,
     ignoredShowInputCol,
     extraTextCol,
   };
@@ -461,33 +647,54 @@ export async function exportExcelWithQRImages(
   file: File,
   rowsData: QrRowData[],
   config: QrConfig,
-  onProgress?: (index: number, total: number) => void
-) {
-  const arrayBuffer = await file.arrayBuffer();
-  const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(arrayBuffer);
+  onProgress?: (index: number, total: number) => void,
+  signal?: AbortSignal
+): Promise<BatchExportResult> {
+  throwIfAborted(signal);
+  assertBatchWorkload(rowsData, config);
+  const workbook = await loadWorkbookFile(file);
+  throwIfAborted(signal);
 
-  const worksheet = workbook.worksheets[0];
+  const sourceSheetName = rowsData.find((item) => item.sourceSheetName)?.sourceSheetName;
+  const sourceHeaderRowNumber =
+    rowsData.find((item) => item.sourceHeaderRowNumber)?.sourceHeaderRowNumber ?? 1;
+  const worksheet = sourceSheetName
+    ? workbook.getWorksheet(sourceSheetName)
+    : workbook.worksheets[0];
   if (!worksheet) {
     throw new Error('未找到可用工作表');
   }
 
-  const headerRow = worksheet.getRow(1);
-  const headers = readHeaders(worksheet);
+  const headerRow = worksheet.getRow(sourceHeaderRowNumber);
+  const headers = readHeaders(worksheet, sourceHeaderRowNumber);
   const inputColumnIndex = findInputColumn(headers);
   if (inputColumnIndex < 1) {
     throw new Error('原始 Excel 中未找到有效的输入内容列，请重新导入表头明确的文件。');
   }
 
   const isBarcode = config.codeMode === 'barcode';
-  const targetHeaderName = isBarcode ? '生成条形码图片' : '生成二维码图片';
+  let targetHeaderName = isBarcode ? '生成条形码图片' : '生成二维码图片';
   const reusableHeaders = isBarcode
     ? ['生成条形码图片', '条形码图片', '条形码图像', '条形码码图']
     : ['生成二维码图片', '二维码图片', '二维码图像', '二维码码图'];
   let imageColIndex = findExactColumn(headers, reusableHeaders);
+  const existingColumnHasImages =
+    imageColIndex > 0 &&
+    worksheet.getImages().some(
+      (image) => Math.floor(image.range.tl.nativeCol) === imageColIndex - 1
+    );
 
-  if (imageColIndex === -1) {
+  if (imageColIndex === -1 || existingColumnHasImages) {
     imageColIndex = Math.max(headerRow.cellCount, worksheet.columnCount) + 1;
+    if (existingColumnHasImages) {
+      let suffix = 2;
+      let candidate = `${targetHeaderName} (${suffix})`;
+      while (headers.some((header) => normalizeHeader(header) === normalizeHeader(candidate))) {
+        suffix += 1;
+        candidate = `${targetHeaderName} (${suffix})`;
+      }
+      targetHeaderName = candidate;
+    }
     const cell = headerRow.getCell(imageColIndex);
     cell.font = { name: '微软雅黑', size: 11, bold: true, color: { argb: 'FFFFFF' } };
     cell.fill = {
@@ -503,15 +710,27 @@ export async function exportExcelWithQRImages(
   const total = rowsData.length;
   let maxRenderedWidth = 140;
   const rowErrors: string[] = [];
+  const rowErrorDetails: Array<{ sourceRowNumber?: number; message: string }> = [];
   const usedSourceRows = new Set<number>();
+  let exportedCount = 0;
 
   for (let i = 0; i < total; i++) {
+    throwIfAborted(signal);
     const item = rowsData[i];
     const sourceRowNumber = getExcelRowNumber(item);
 
     try {
       if (!sourceRowNumber) {
         throw new Error(`第 ${i + 1} 条数据缺少有效的原始 Excel 行号，请重新导入文件`);
+      }
+      if (item.sourceSheetName && item.sourceSheetName !== worksheet.name) {
+        throw new Error('原始工作表名称不一致，请重新导入文件');
+      }
+      if (
+        item.sourceHeaderRowNumber &&
+        item.sourceHeaderRowNumber !== sourceHeaderRowNumber
+      ) {
+        throw new Error('原始表头行号不一致，请重新导入文件');
       }
       if (sourceRowNumber > worksheet.rowCount) {
         throw new Error('原始行号超出当前工作表范围');
@@ -530,7 +749,7 @@ export async function exportExcelWithQRImages(
       );
 
       const imageId = workbook.addImage({
-        base64: dataUrl,
+        buffer: pngDataUrlToBuffer(dataUrl),
         extension: 'png',
       });
 
@@ -567,15 +786,46 @@ export async function exportExcelWithQRImages(
         ext: { width: imgWidth, height: imgHeight },
         editAs: 'oneCell',
       });
+      exportedCount += 1;
     } catch (error) {
+      if (isAbortError(error)) throw error;
       const rowLabel = sourceRowNumber ? `Excel 第 ${sourceRowNumber} 行` : `第 ${i + 1} 条数据`;
-      rowErrors.push(`${rowLabel}：${getErrorMessage(error)}`);
+      const message = getErrorMessage(error);
+      rowErrors.push(`${rowLabel}：${message}`);
+      rowErrorDetails.push({ sourceRowNumber, message });
     } finally {
       if (onProgress) onProgress(i + 1, total);
     }
+
+    if ((i + 1) % BATCH_YIELD_INTERVAL === 0) {
+      await yieldToBrowser();
+      throwIfAborted(signal);
+    }
   }
 
-  if (rowErrors.length > 0) throw createRowsError(rowErrors);
+  if (exportedCount === 0 && rowErrors.length > 0) throw createRowsError(rowErrors);
+
+  if (rowErrorDetails.length > 0) {
+    const errorColIndex = Math.max(headerRow.cellCount, worksheet.columnCount) + 1;
+    const errorHeaderCell = headerRow.getCell(errorColIndex);
+    errorHeaderCell.value = '码图生成错误';
+    errorHeaderCell.font = { name: '微软雅黑', size: 11, bold: true, color: { argb: 'FFFFFF' } };
+    errorHeaderCell.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'DC2626' },
+    };
+    errorHeaderCell.alignment = { vertical: 'middle', horizontal: 'center' };
+    worksheet.getColumn(errorColIndex).width = 42;
+
+    rowErrorDetails.forEach(({ sourceRowNumber, message }) => {
+      if (!sourceRowNumber) return;
+      const cell = worksheet.getRow(sourceRowNumber).getCell(errorColIndex);
+      cell.value = message;
+      cell.alignment = { vertical: 'top', wrapText: true };
+      cell.font = { color: { argb: 'B91C1C' } };
+    });
+  }
 
   // 动态调整表格“码图”列宽 (以字符长度计量，约每 7 像素为一个字符)
   const dynamicColWidth = Math.max(Math.ceil(maxRenderedWidth / 6.8) + 3, isBarcode ? 36 : 24);
@@ -585,6 +835,7 @@ export async function exportExcelWithQRImages(
   const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
   const label = isBarcode ? '条形码' : '二维码';
   saveAs(blob, `批量${label}导出_${Date.now()}.xlsx`);
+  return { exportedCount, errors: rowErrors };
 }
 
 /**
@@ -593,15 +844,20 @@ export async function exportExcelWithQRImages(
 export async function downloadImagesZip(
   rowsData: QrRowData[],
   config: QrConfig,
-  onProgress?: (current: number, total: number) => void
-) {
+  onProgress?: (current: number, total: number) => void,
+  signal?: AbortSignal
+): Promise<BatchExportResult> {
+  throwIfAborted(signal);
+  assertBatchWorkload(rowsData, config);
   const zip = new JSZip();
   const folderName = config.codeMode === 'barcode' ? 'barcode_images' : 'qrcode_images';
   const folder = zip.folder(folderName);
   const total = rowsData.length;
   const rowErrors: string[] = [];
+  let exportedCount = 0;
 
   for (let i = 0; i < total; i++) {
+    throwIfAborted(signal);
     const item = rowsData[i];
     const sourceRowNumber = getExcelRowNumber(item);
 
@@ -617,22 +873,36 @@ export async function downloadImagesZip(
         config.showInputText,
         item.extraText
       );
-      const base64Data = dataUrl.replace(/^data:image\/png;base64,/, '');
-
       const safeName = (item.extraText || item.inputText || `code_${i + 1}`)
         .replace(/[\\/:*?"<>|]/g, '_')
         .slice(0, 30);
-      folder?.file(`${i + 1}_${safeName}.png`, base64Data, { base64: true });
+      folder?.file(`${i + 1}_${safeName}.png`, pngDataUrlToBuffer(dataUrl));
+      exportedCount += 1;
     } catch (error) {
+      if (isAbortError(error)) throw error;
       const rowLabel = sourceRowNumber ? `Excel 第 ${sourceRowNumber} 行` : `第 ${i + 1} 条数据`;
       rowErrors.push(`${rowLabel}：${getErrorMessage(error)}`);
     } finally {
       if (onProgress) onProgress(i + 1, total);
     }
+
+    if ((i + 1) % BATCH_YIELD_INTERVAL === 0) {
+      await yieldToBrowser();
+      throwIfAborted(signal);
+    }
   }
 
-  if (rowErrors.length > 0) throw createRowsError(rowErrors);
+  if (exportedCount === 0 && rowErrors.length > 0) throw createRowsError(rowErrors);
+  if (rowErrors.length > 0) {
+    zip.file('生成失败记录.txt', `以下数据未生成图片：\n\n${rowErrors.join('\n')}`);
+  }
 
-  const content = await zip.generateAsync({ type: 'blob' });
+  throwIfAborted(signal);
+  const content = await zip.generateAsync(
+    { type: 'blob', streamFiles: true },
+    () => throwIfAborted(signal)
+  );
+  throwIfAborted(signal);
   saveAs(content, `码图压缩包_${Date.now()}.zip`);
+  return { exportedCount, errors: rowErrors };
 }

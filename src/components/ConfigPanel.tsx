@@ -4,6 +4,7 @@ import {
   Crop,
   Maximize2,
   QrCode as QrIcon,
+  RotateCcw,
   Settings2,
   Sliders,
   Sparkles,
@@ -14,6 +15,7 @@ import { AspectRatioOption, BarcodeFormat, QrConfig } from '../types';
 interface ConfigPanelProps {
   config: QrConfig;
   onChange: (newConfig: QrConfig) => void;
+  onReset: () => void;
 }
 
 const BARCODE_FORMATS: { label: string; value: BarcodeFormat; desc: string }[] = [
@@ -53,7 +55,7 @@ const textInputClass =
 const colorInputClass =
   'h-11 w-11 cursor-pointer rounded-lg border border-slate-200 p-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-1';
 
-export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, onChange }) => {
+export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, onChange, onReset }) => {
   const updateField = <K extends keyof QrConfig>(field: K, value: QrConfig[K]) => {
     onChange({ ...config, [field]: value });
   };
@@ -63,8 +65,16 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, onChange }) =>
   return (
     <div className="space-y-6 rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm sm:p-5">
       <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
-        <Settings2 className="h-5 w-5 text-indigo-600" aria-hidden="true" />
-        <h2 className="text-base font-semibold text-slate-800">样式与码制类型设置</h2>
+        <Settings2 className="h-5 w-5 shrink-0 text-indigo-600" aria-hidden="true" />
+        <h2 className="min-w-0 flex-1 text-base font-semibold text-slate-800">样式与码制类型设置</h2>
+        <button
+          type="button"
+          onClick={onReset}
+          className="inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-lg px-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+        >
+          <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+          恢复默认
+        </button>
       </div>
 
       <fieldset className="min-w-0 space-y-2">
@@ -253,9 +263,13 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, onChange }) =>
                   max="4"
                   step="1"
                   value={config.margin}
+                  aria-describedby="config-qr-margin-help"
                   onChange={(event) => updateField('margin', Number(event.target.value))}
                   className={rangeInputClass}
                 />
+                <p id="config-qr-margin-help" className="mt-1 text-[11px] leading-4 text-slate-500">
+                  建议保持 4 个模块静区；更小边距可能降低扫码成功率。
+                </p>
               </div>
             </div>
           )}
